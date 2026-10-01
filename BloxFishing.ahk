@@ -307,9 +307,9 @@ RES_ORDER    := ["1920x1080", "2560x1440"]
 ; Regions as fractions of the game window: [left, top, right, bottom].
 Regions := {
     bar:   [0.2138, 0.7184, 0.8502, 0.8181],   ; reel bar search band
-    bite:  [0.3947, 0.2360, 0.6195, 0.5955],   ; "!" marker area
-    meter: [0.1616, 0.1777, 0.8833, 0.8666],   ; cast charge meter (keep wide)
-    menu:  [0.6903, 0.3982, 0.9347, 0.7416],   ; NPC button stack
+    bite:  [0.2800, 0.1600, 0.7200, 0.6000],   ; "!" marker area (excludes the top-right player list)
+    meter: [0.1800, 0.2200, 0.8200, 0.8800],   ; cast charge meter (beside the character; excludes side HUD)
+    menu:  [0.6700, 0.3900, 0.9500, 0.7450],   ; NPC button stack
     craft: [0.4020, 0.5769, 0.6020, 0.7162],   ; yellow Craft button
     learn: [0.6753, 0.6482, 0.8573, 0.7458]    ; recipe-note "Learn" button
 }
@@ -329,7 +329,7 @@ Points := {
 
 ; Timings in seconds (same defaults as the Python build).
 Timing := {
-    castHold: 1.20, castSettle: 1.60, maxCastAttempts: 4, castRetryGap: 0.45
+    castHold: 1.20, releaseLead: 0.012, castSettle: 1.60, maxCastAttempts: 4, castRetryGap: 0.45
   , biteClickDelay: 0.05, biteToBar: 5.0, maxWaitBite: 30.0, maxReel: 12.0
   , flickGap: 0.08, flickSlowDelay: 0.50, flickSlowGap: 0.50, flickSettle: 0.50
   , catchConfirm: 0.30, popupDelay: 1.60, catchClickGap: 0.35, catchSettle: 0.55
@@ -357,7 +357,7 @@ PAGE_ROWS := Map("root", 4, "shop", 3, "bait", 2, "confirm", 2)
 Cfg := {
     resolution: "Auto", rodSlot: "4", fastBite: false, slowFlick: false
   , chest: true, anchor: true, buyBait: true, baitNow: 0, baitPer: 40
-  , sellOn: true, sellEvery: 100, flick: true
+  , sellOn: true, sellEvery: 100, flick: true, perfect: true
 }
 
 ; Runtime state.
@@ -367,6 +367,7 @@ BotState := {
   , shiftLock: false, shiftVerified: false, rodEquipped: true
   , atNpc: true, bait: -1, sinceSell: 0, lastResponse: 0.0, witness: ""
   , flicked: false, lastEscaped: false, buyFailures: 0, lastBought: 0
+  , meterFull: 0, biteInfo: ""
 }
 BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
            , biteTimeouts: 0, sales: 0, purchases: 0, started: 0.0}
@@ -869,7 +870,9 @@ ProgressPresent(geo) {
     return n && (hit / n) >= 0.5
 }
 
-; Bite marker: magenta-pink ring + "!" (hue 316..358 deg), size-gated.
+; Bite marker: a magenta-pink ring + "!" (hue 316..358 deg, S>=45/255, V>=110).
+; Same method as the Python build: colour mask -> connected blobs (small gaps
+; closed) -> shape gates on each blob, so stray pink pixels can't spoil it.
 BiteNow() {
     win := BotState.win
     r := SubRect(win, Regions.bite)
@@ -877,13 +880,17 @@ BiteNow() {
     gr.Capture(r.x, r.y)
     bits := gr.bits
     w := r.w, h := r.h
-    st := Max(4, Round(6 * BotState.sc))
-    n := 0
-    minX := 99999, maxX := -1, minY := 99999, maxY := -1
+    st := Max(3, Round(3.5 * BotState.sc))
+    gw := (w + st - 1) // st
+    gh := (h + st - 1) // st
+    mask := Buffer(gw * gh, 0)
+    cxs := [], cys := []
 
+    gy := 0
     y := 0
     while (y < h) {
         base := y * w * 4
+        gx := 0
         x := 0
         while (x < w) {
             v := NumGet(bits, base + x * 4, "UInt")
@@ -894,54 +901,123 @@ BiteNow() {
                 if (bb > gg && rr >= bb) {
                     d := rr - gg
                     e := bb - gg
-                    ; saturation >= 45/255, hue between 316 and 358 degrees
-                    if (d * 17 >= 3 * rr && e * 100 <= 73 * d && e * 100 >= 5 * d) {
-                        n++
-                        if (x < minX)
-                            minX := x
-                        if (x > maxX)
-                            maxX := x
-                        if (y < minY)
-                            minY := y
-                        if (y > maxY)
-                            maxY := y
+                    if (d * 17 >= 3 * rr && e * 100 <= 73 * d && e * 30 >= d) {
+                        NumPut("UChar", 1, mask, gy * gw + gx)
+                        cxs.Push(gx)
+                        cys.Push(gy)
                     }
                 }
             }
             x += st
+            gx++
         }
         y += st
+        gy++
     }
-    if (n < 6)
+    n := cxs.Length
+    BotState.biteInfo := "pink cells=" . n
+    if (n < 4 || n > 12000)
         return false
-    bw := maxX - minX + st
-    bh := maxY - minY + st
-    if (Max(bw, bh) < w * 0.055)                           ; size gate
-        return false
-    aspect := bw / bh
-    if (aspect < 0.40 || aspect > 2.30)
-        return false
-    if ((n * st * st) < 6e-4 * w * h)
-        return false
-    return (n * st * st) / (bw * bh) >= 0.15               ; fill gate
+
+    seen := Buffer(gw * gh, 0)
+    gap := 2                                   ; cells: bridges ~8 px gaps (the "close")
+    minDim := w * 0.055
+    areaFloor := 6e-4 * w * h
+    bestDim := 0
+    Loop n {
+        i := A_Index
+        sx := cxs[i], sy := cys[i]
+        if NumGet(seen, sy * gw + sx, "UChar")
+            continue
+        NumPut("UChar", 1, seen, sy * gw + sx)
+        stack := [[sx, sy]]
+        cnt := 0
+        minX := sx, maxX := sx, minY := sy, maxY := sy
+        while stack.Length {
+            c := stack.Pop()
+            px := c[1], py := c[2]
+            cnt++
+            if (px < minX)
+                minX := px
+            if (px > maxX)
+                maxX := px
+            if (py < minY)
+                minY := py
+            if (py > maxY)
+                maxY := py
+            ny := Max(0, py - gap)
+            while (ny <= Min(gh - 1, py + gap)) {
+                nx := Max(0, px - gap)
+                while (nx <= Min(gw - 1, px + gap)) {
+                    o := ny * gw + nx
+                    if (NumGet(mask, o, "UChar") && !NumGet(seen, o, "UChar")) {
+                        NumPut("UChar", 1, seen, o)
+                        stack.Push([nx, ny])
+                    }
+                    nx++
+                }
+                ny++
+            }
+        }
+        bw := (maxX - minX + 1) * st
+        bh := (maxY - minY + 1) * st
+        area := cnt * st * st
+        bestDim := Max(bestDim, Max(bw, bh))
+        if (Max(bw, bh) < minDim || area < areaFloor)
+            continue
+        aspect := bw / bh
+        if (aspect <= 0.40 || aspect >= 2.30)
+            continue
+        if (area / (bw * bh) < 0.10)
+            continue
+        BotState.biteInfo := "marker " . bw . "x" . bh . " px"
+        return true
+    }
+    BotState.biteInfo := "pink cells=" . n . " largest blob=" . bestDim . " px (need " . Round(minDim) . ")"
+    return false
 }
 
-; Cast charge meter: a solid bright-green bar (~(16,249,31) BGR) near the
-; character. Native PixelSearch finds its top; a second probe proves the height.
-MeterCharged() {
-    win := BotState.win
-    r := SubRect(win, Regions.meter)
-    if !PixelSearch(&fx, &fy, r.x, r.y, r.x + r.w, r.y + r.h, 0x1FF910, 30)
-        return false
-    need := Max(20, Round(win.h * 0.05))
-    py := fy + need - 1
-    if (py >= r.y + r.h)
-        return false
-    c := PixelGetColor(fx, py)
+IsMeterGreen(c) {
     rr := (c >> 16) & 255
     gg := (c >> 8) & 255
     bb := c & 255
     return gg > 150 && gg > bb + 80 && gg > rr + 80
+}
+
+; Cast charge meter: a bright-green vertical bar beside the character
+; (~(31,249,16) RGB). Returns its current height in px, 0 when not charging.
+; Native PixelSearch finds the top; one thin capture measures the height.
+MeterRead() {
+    win := BotState.win
+    r := SubRect(win, Regions.meter)
+    x1 := r.x, y1 := r.y
+    x2 := r.x + r.w, y2 := r.y + r.h
+    need := Max(10, Round(win.h * 0.03))
+    Loop 8 {
+        if !PixelSearch(&fx, &fy, x1, y1, x2, y2, 0x1FF910, 30)
+            return 0
+        xc := fx + Round(3 * BotState.sc)
+        maxH := Min(Round(win.h * 0.20), y2 - fy)
+        if (maxH >= need) {
+            gr := ScreenGrab.Get(1, maxH)
+            gr.Capture(xc, fy)
+            hgt := 0, miss := 0
+            Loop maxH {
+                if IsMeterGreen(NumGet(gr.bits, (A_Index - 1) * 4, "UInt")) {
+                    hgt := A_Index
+                    miss := 0
+                } else if (++miss > 3) {
+                    break
+                }
+            }
+            if (hgt >= need)
+                return hgt
+        }
+        y1 := fy + 6                       ; false hit (side HUD bar): look below it
+        if (y1 >= y2)
+            break
+    }
+    return 0
 }
 
 ; Recipe note: navy "Learn" button carrying white text.
@@ -1001,7 +1077,9 @@ CraftUp() {
     return false
 }
 
-; Update 30 NPC menu: wide dark panels stacked in the menu region. Returns an
+; Update 30 NPC menu: wide, very dark panels (~RGB 28) stacked in the menu
+; region. The panel colour is far darker than the night sea behind it, so a
+; strict darkness cut separates panels from the gaps between them. Returns an
 ; array of {x, y} click targets (absolute), top to bottom, or [] when unsure.
 MenuPanels() {
     r := SubRect(BotState.win, Regions.menu)
@@ -1010,12 +1088,12 @@ MenuPanels() {
     bits := gr.bits
     w := r.w, h := r.h
     colStep := 4
-    need := Max(8, Floor(Ceil(w / colStep) * 0.45))
-    minH := Max(18, Floor(h * 0.09))
-    maxH := Max(minH + 1, Floor(h * 0.40))
-    panels := []
-    start := -1, lastOn := -1
-
+    cols := (w + colStep - 1) // colStep
+    nrows := (h + 1) // 2
+    counts := []
+    counts.Length := nrows
+    maxC := 0
+    ri := 0
     y := 0
     while (y < h) {
         dark := 0
@@ -1024,28 +1102,60 @@ MenuPanels() {
         while (x < w) {
             v := NumGet(bits, base + x * 4, "UInt")
             gray := (((v >> 16) & 255) * 299 + ((v >> 8) & 255) * 587 + (v & 255) * 114) // 1000
-            if (gray < 90)
+            if (gray <= 48)
                 dark++
             x += colStep
         }
-        if (dark >= need) {
-            if (start < 0)
-                start := y
-            lastOn := y
-        } else if (start >= 0 && y - lastOn > 4) {
-            hgt := lastOn - start + 1
-            if (hgt >= minH && hgt <= maxH)
-                panels.Push({x: r.x + w // 2, y: r.y + (start + lastOn) // 2})
-            start := -1
-        }
+        ri++
+        counts[ri] := dark
+        if (dark > maxC)
+            maxC := dark
         y += 2
     }
-    if (start >= 0) {
-        hgt := lastOn - start + 1
-        if (hgt >= minH && hgt <= maxH)
-            panels.Push({x: r.x + w // 2, y: r.y + (start + lastOn) // 2})
+    if (maxC < cols * 0.25)
+        return []
+    need := Max(8, Floor(maxC * 0.35))
+    minH := Max(18, Floor(h * 0.09))
+    maxH := Max(minH + 1, Floor(h * 0.40))
+    panels := []
+    start := -1, lastOn := -1
+
+    Loop nrows + 1 {
+        i := A_Index
+        on := (i <= nrows) && counts[i] >= need
+        yy := (i - 1) * 2
+        if on {
+            if (start < 0)
+                start := yy
+            lastOn := yy
+        } else if (start >= 0 && (i > nrows || yy - lastOn > 4)) {
+            hgt := lastOn - start + 1
+            if (hgt >= minH && hgt <= maxH)
+                panels.Push(PanelTarget(bits, w, colStep, r, start, lastOn))
+            start := -1
+        }
     }
     return panels.Length >= 2 ? panels : []
+}
+
+; Click point: 40 % into the dark span of the panel's middle row.
+PanelTarget(bits, w, colStep, r, y0, y1) {
+    ym := (y0 + y1) // 2
+    xs := -1, xe := -1
+    x := 0
+    while (x < w) {
+        v := NumGet(bits, ym * w * 4 + x * 4, "UInt")
+        gray := (((v >> 16) & 255) * 299 + ((v >> 8) & 255) * 587 + (v & 255) * 114) // 1000
+        if (gray <= 48) {
+            if (xs < 0)
+                xs := x
+            xe := x
+        }
+        x += colStep
+    }
+    if (xs < 0)
+        return {x: r.x + w // 2, y: r.y + ym}
+    return {x: r.x + xs + Round((xe - xs) * 0.40), y: r.y + ym}
 }
 
 PanelSig(panels) {
@@ -1512,23 +1622,61 @@ DoCast() {
         return false
     }
 
+    winH := BotState.win.h
+    seenMin := Max(10, Round(winH * 0.03))       ; any bar at all = the press took
+    plateauMin := Round(winH * 0.08)             ; a plausible "nearly full" height
     Loop Timing.maxCastAttempts {
         attempt := A_Index
         Mouse.Hold(true)
         deadline := Now() + Timing.castHold
-        charged := false
+        charged := false, perfect := false
+        peak := 0, prevH := 0, flat := 0
+        tPrev := Now(), rate := 0.0
+        full := BotState.meterFull               ; learned full height (0 = not yet)
+
         while (Alive() && Now() < deadline) {
-            if MeterCharged() {
+            hgt := MeterRead()
+            tn := Now()
+            if (hgt >= seenMin) {
                 charged := true
-                break
+                if !Cfg.perfect {
+                    Wait(Min(0.15, Timing.castHold))     ; classic: hold a beat, release
+                    break
+                }
+                if (hgt > peak) {
+                    peak := hgt
+                    flat := 0
+                } else {
+                    flat++
+                }
+                if (prevH > 0 && tn > tPrev)
+                    rate := (hgt - prevH) / (tn - tPrev)
+                prevH := hgt
+                tPrev := tn
+                if (full > 0) {
+                    ; Release the moment the bar will be full by the time the
+                    ; click lands (lead compensates capture + input latency).
+                    if (hgt + Max(0.0, rate) * Timing.releaseLead >= full - 1) {
+                        perfect := true
+                        break
+                    }
+                } else if (peak >= plateauMin && flat >= 3) {
+                    perfect := true                      ; first cast: bar stopped growing = full
+                    break
+                }
             }
-            Sleep(8)
+            Sleep(1)
         }
-        if charged
-            Wait(Min(0.15, Timing.castHold))            ; hold a beat at full charge
         Mouse.Hold(false)
 
         if charged {
+            if (Cfg.perfect && peak >= plateauMin && peak <= winH * 0.20) {
+                if (full <= 0 || peak > full)
+                    BotState.meterFull := peak
+                LogMsg("[cast] released at " . peak . " px"
+                    . (BotState.meterFull > 0 ? " (" . Round(100 * peak / BotState.meterFull) . "% of full)" : "")
+                    . (perfect ? "" : " - timed out before full"))
+            }
             BotStats.casts += 1
             LogMsg("[cast] #" . BotStats.casts . (attempt == 1 ? "" : " (attempt " . attempt . ")"))
             Wait(Timing.castSettle)
@@ -1574,7 +1722,7 @@ WaitForBite() {
         Sleep(Cfg.fastBite ? 1 : 8)
     }
     BotStats.biteTimeouts += 1
-    LogMsg("[bite] timed out, recasting")
+    LogMsg("[bite] timed out, recasting (" . BotState.biteInfo . ")")
     return false
 }
 
@@ -1928,6 +2076,7 @@ LoadSettings() {
     Cfg.slowFlick  := IniRead(INI_FILE, "fishing", "slowFlick", "0") == "1"
     Cfg.chest      := IniRead(INI_FILE, "fishing", "chest", "1") == "1"
     Cfg.anchor     := IniRead(INI_FILE, "fishing", "anchor", "1") == "1"
+    Cfg.perfect    := IniRead(INI_FILE, "fishing", "perfect", "1") == "1"
     Cfg.buyBait    := IniRead(INI_FILE, "shop", "buyBait", "1") == "1"
     Cfg.baitNow    := Integer(IniRead(INI_FILE, "shop", "baitNow", "0"))
     Cfg.baitPer    := Integer(IniRead(INI_FILE, "shop", "baitPer", "40"))
@@ -1942,6 +2091,7 @@ SyncSettings() {
     Cfg.slowFlick  := Ui.slow.Value == 1
     Cfg.chest      := Ui.chest.Value == 1
     Cfg.anchor     := Ui.anchor.Value == 1
+    Cfg.perfect    := Ui.perfect.Value == 1
     Cfg.buyBait    := Ui.buy.Value == 1
     Cfg.baitNow    := IntOf(Ui.baitNow, 0)
     Cfg.baitPer    := Max(10, (IntOf(Ui.baitPer, 40) // 10) * 10)
@@ -1962,6 +2112,7 @@ SaveSettings() {
     IniWrite(Cfg.slowFlick ? 1 : 0, INI_FILE, "fishing", "slowFlick")
     IniWrite(Cfg.chest ? 1 : 0, INI_FILE, "fishing", "chest")
     IniWrite(Cfg.anchor ? 1 : 0, INI_FILE, "fishing", "anchor")
+    IniWrite(Cfg.perfect ? 1 : 0, INI_FILE, "fishing", "perfect")
     IniWrite(Cfg.buyBait ? 1 : 0, INI_FILE, "shop", "buyBait")
     IniWrite(Cfg.baitNow, INI_FILE, "shop", "baitNow")
     IniWrite(Cfg.baitPer, INI_FILE, "shop", "baitPer")
@@ -2010,7 +2161,7 @@ BuildGui() {
         Ui.res.Choose(1)
     Ui.resNote := g.Add("Text", "x300 y33 w180 cGray", "Screen: " . A_ScreenWidth . "x" . A_ScreenHeight)
 
-    g.Add("GroupBox", "x10 y72 w480 h92", "Fishing")
+    g.Add("GroupBox", "x10 y72 w480 h118", "Fishing")
     g.Add("Text", "x24 y96", "Rod hotbar slot:")
     Ui.rod := g.Add("DropDownList", "x125 y92 w50", ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"])
     try Ui.rod.Choose(Cfg.rodSlot)
@@ -2020,35 +2171,37 @@ BuildGui() {
     Ui.slow := g.Add("Checkbox", "x345 y94 w135", "Slower fish trick")
     Ui.chest := g.Add("Checkbox", "x24 y126 w140", "Collect chests")
     Ui.anchor := g.Add("Checkbox", "x200 y126 w280", "Anchor at the NPC on start (recommended)")
+    Ui.perfect := g.Add("Checkbox", "x24 y158 w300", "Perfect cast (release at full charge)")
+    Ui.perfect.Value := Cfg.perfect ? 1 : 0
     Ui.fast.Value := Cfg.fastBite ? 1 : 0
     Ui.slow.Value := Cfg.slowFlick ? 1 : 0
     Ui.chest.Value := Cfg.chest ? 1 : 0
     Ui.anchor.Value := Cfg.anchor ? 1 : 0
 
-    g.Add("GroupBox", "x10 y170 w480 h92", "Shop")
-    Ui.buy := g.Add("Checkbox", "x24 y192 w140", "Buy bait")
+    g.Add("GroupBox", "x10 y196 w480 h92", "Shop")
+    Ui.buy := g.Add("Checkbox", "x24 y218 w140", "Buy bait")
     Ui.buy.Value := Cfg.buyBait ? 1 : 0
-    g.Add("Text", "x170 y193", "Bait now (0 = don't track):")
-    Ui.baitNow := g.Add("Edit", "x345 y189 w60 Number", Cfg.baitNow)
+    g.Add("Text", "x170 y219", "Bait now (0 = don't track):")
+    Ui.baitNow := g.Add("Edit", "x345 y215 w60 Number", Cfg.baitNow)
     g.Add("UpDown", "Range0-9999", Cfg.baitNow)
-    g.Add("Text", "x24 y225", "Bait per purchase (x10):")
-    Ui.baitPer := g.Add("Edit", "x170 y221 w60 Number", Cfg.baitPer)
+    g.Add("Text", "x24 y251", "Bait per purchase (x10):")
+    Ui.baitPer := g.Add("Edit", "x170 y247 w60 Number", Cfg.baitPer)
     g.Add("UpDown", "Range10-999", Cfg.baitPer)
-    Ui.sell := g.Add("Checkbox", "x250 y225 w90", "Sell every")
+    Ui.sell := g.Add("Checkbox", "x250 y251 w90", "Sell every")
     Ui.sell.Value := Cfg.sellOn ? 1 : 0
-    Ui.sellEvery := g.Add("Edit", "x345 y221 w60 Number", Cfg.sellEvery)
+    Ui.sellEvery := g.Add("Edit", "x345 y247 w60 Number", Cfg.sellEvery)
     g.Add("UpDown", "Range0-9999", Cfg.sellEvery)
-    g.Add("Text", "x412 y225", "catches")
+    g.Add("Text", "x412 y251", "catches")
 
-    Ui.start := g.Add("Button", "x10 y270 w140 h30 Default", "Start  (F2)")
+    Ui.start := g.Add("Button", "x10 y296 w140 h30 Default", "Start  (F2)")
     Ui.start.OnEvent("Click", ToggleRun)
-    btnCheck := g.Add("Button", "x160 y270 w140 h30", "Check setup")
+    btnCheck := g.Add("Button", "x160 y296 w140 h30", "Check setup")
     btnCheck.OnEvent("Click", CheckSetup)
-    btnQuit := g.Add("Button", "x350 y270 w140 h30", "Quit  (F4)")
+    btnQuit := g.Add("Button", "x350 y296 w140 h30", "Quit  (F4)")
     btnQuit.OnEvent("Click", (*) => ExitApp())
-    Ui.status := g.Add("Text", "x10 y308 w480", "Status: Idle")
+    Ui.status := g.Add("Text", "x10 y334 w480", "Status: Idle")
 
-    Ui.log := g.Add("Edit", "x10 y328 w480 r13 ReadOnly -Wrap +VScroll")
+    Ui.log := g.Add("Edit", "x10 y354 w480 r13 ReadOnly -Wrap +VScroll")
     g.Show("w500")
     Ui.gui := g
 }
