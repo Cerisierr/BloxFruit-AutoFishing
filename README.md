@@ -489,8 +489,6 @@ Then:
 
 ---
 
-# License
+## Credits
 
-See [`LICENSE`](LICENSE).
-
-This project uses the custom BloxFishing license included with this release.
+This project was created with assistance from **Claude by Anthropic**.
