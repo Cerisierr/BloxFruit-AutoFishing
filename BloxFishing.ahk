@@ -296,7 +296,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.18.3"
+APP_VERSION := "1.18.5"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
@@ -403,6 +403,7 @@ BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
            , biteTimeouts: 0, sales: 0, purchases: 0, baitBought: 0, spent: 0
            , income: 0, unreadable: 0, levels: 0, chests: 0, started: 0.0, lastUp: 0.0}
 Hour := {started: 0.0}                                  ; counters since the last hourly report
+PrevHour := {valid: false, secs: 0.0, catches: 0, income: 0, levels: 0}   ; the report window before this one (for the comparison)
 ; Remote Desktop session. Everything added for RDP in v1.18.x is gated by Rdp.on, so
 ; a normal desktop (1920x1080, 2560x1440, ...) runs exactly the pre-1.18 logic.
 Rdp := {on: false, castLead: 0.08, how: ""}
@@ -3116,6 +3117,7 @@ ResetStats() {
     BotStats.started := Now()
     Hist.Length := 0
     Hist.Push([0, 0, 0, 0])
+    PrevHour.valid := false
     ResetHour()
 }
 
@@ -3827,16 +3829,23 @@ SendHourly(*) {
         , ["Fish per hour", Round(h.catches * 60 / mins, 1)]
         , ["Session total", "$" . Fmt(BotStats.income) . " earned  |  " . Fmt(BotStats.catches)
             . " fish  |  " . FmtDur(Now() - BotStats.started) . " running", false]]
+    cmp := CompareLine()
+    if (cmp != "")
+        f.Push(["Vs previous hour (per hour)", cmp, false])
     card := ReportCard("hour")
     if (card != "") {
         desc := "Last " . Round(mins) . " min  |  +$" . Fmt(h.income) . "  |  " . LvlGain(h.levels)
             . " levels  |  " . Fmt(h.catches) . " fish"
+        if (cmp != "")
+            desc .= "`nVs previous hour: " . cmp
         HookPost(EmbedJson("Hourly Report", desc, 0x6C8CFF, "", "report.png"), card, , "hourly report"
             , "report.png", false, HourlyUrl())
         LogMsg("[webhook] hourly report sent (card)")
+        SavePrevHour()
         ResetHour()
         return
     }
+    LogMsg("[webhook] hourly report: the image card could not be drawn - sending the text version instead (see the [card] line above)")
     shot := ""
     if (Cfg.hkShot && BotState.running) {                ; the $ + level block, bottom-left
         r := SubRect(BotState.win, Regions.hud)
@@ -3847,7 +3856,49 @@ SendHourly(*) {
     HookPost(EmbedJson("Hourly Report", "Last " . Round(mins) . " min  |  " . Cfg.npc . "  |  "
         . CurBait().name, 0x6C8CFF, f, (shot != "") ? "hud.png" : ""), shot, , "hourly report", "hud.png", false, HourlyUrl())
     LogMsg("[webhook] hourly report sent")
+    SavePrevHour()
     ResetHour()
+}
+
+; ---- hour-vs-previous-hour comparison ----------------------------------------
+; Remember the window that was just reported, so the next report can compare against it.
+; Windows shorter than 5 minutes are not a fair baseline and are ignored.
+SavePrevHour() {
+    secs := Max(3, Now() - Hour.started)
+    PrevHour.valid := (secs >= 300)
+    PrevHour.secs := secs
+    PrevHour.catches := Hour.catches
+    PrevHour.income := Hour.income
+    PrevHour.levels := Hour.levels
+}
+
+; Counters of a window -> per-hour rates.
+Rates(catches, income, levels, secs) {
+    k := 3600 / Max(60, secs)
+    return {fish: catches * k, money: income * k, lvl: levels * k}
+}
+
+; Change of cur against prev: text + ARGB colour.
+DeltaInfo(cur, prev) {
+    green := 0xFF4ADE80
+    red := 0xFFF87171
+    grey := 0xFF9A9AA4
+    if (prev <= 0)
+        return {txt: (cur > 0) ? "▲ new" : "=", col: (cur > 0) ? green : grey}
+    pct := (cur - prev) / prev * 100
+    if (Abs(pct) < 0.5)
+        return {txt: "= same", col: grey}
+    return {txt: (pct > 0 ? "▲ +" : "▼ ") . Round(pct) . "%", col: (pct > 0) ? green : red}
+}
+
+; One line for the text embed, or "" when there is no previous hour yet.
+CompareLine() {
+    if !PrevHour.valid
+        return ""
+    cur := Rates(Hour.catches, Hour.income, Hour.levels, Max(3, Now() - Hour.started))
+    prv := Rates(PrevHour.catches, PrevHour.income, PrevHour.levels, PrevHour.secs)
+    return "fish " . DeltaInfo(cur.fish, prv.fish).txt . "  |  money " . DeltaInfo(cur.money, prv.money).txt
+        . "  |  levels " . DeltaInfo(cur.lvl, prv.lvl).txt
 }
 
 HookTest(*) {
@@ -3967,7 +4018,7 @@ class Gp {
         fmt := 0
         DllCall("gdiplus\GdipCreateStringFormat", "int", 0x1000, "int", 0, "ptr*", &fmt)     ; NoWrap
         DllCall("gdiplus\GdipSetStringFormatAlign", "ptr", fmt, "int", align)
-        DllCall("gdiplus\GdipSetStringFormatLineAlignment", "ptr", fmt, "int", valign)
+        DllCall("gdiplus\GdipSetStringFormatLineAlign", "ptr", fmt, "int", valign)
         rc := Buffer(16, 0)
         NumPut("float", x, "float", y, "float", w, "float", h, rc)
         br := this.Brush(argb)
@@ -4094,12 +4145,39 @@ CardPanel(c, x, y, w, h, title, rows) {
     }
 }
 
+; Full-width panel: per-hour rates of fish / money / levels against the previous hour.
+; prev = 0 when there is no previous hour yet.
+CardCompare(c, x, y, w, h, title, cur, prev) {
+    Gp.RoundRect(c, x, y, w, h, 14, 0xFF1E1E22)
+    Gp.Text(c, title, x, y + 8, w, 28, 15, 0xFFEDEDED, true, 1, 1)
+    cw := (w - 36) // 3
+    items := [["FISH / HOUR", Round(cur.fish, 1), IsObject(prev) ? Round(prev.fish, 1) : "", cur.fish, IsObject(prev) ? prev.fish : 0, 0xFFEDEDED]
+            , ["MONEY / HOUR", ShortNum(cur.money), IsObject(prev) ? ShortNum(prev.money) : "", cur.money, IsObject(prev) ? prev.money : 0, 0xFF4ADE80]
+            , ["LEVELS / HOUR", Round(cur.lvl, 1), IsObject(prev) ? Round(prev.lvl, 1) : "", cur.lvl, IsObject(prev) ? prev.lvl : 0, 0xFFFBBF24]]
+    for i, it in items {
+        cx := x + 18 + (i - 1) * cw
+        if (i > 1)
+            Gp.Line(c, [cx - 8, y + 48, cx - 8, y + h - 14], 0xFF35353B, 1)
+        Gp.Text(c, it[1], cx, y + 44, cw - 16, 18, 11, 0xFF9A9AA4, false, 0, 1)
+        Gp.Text(c, it[2], cx, y + 62, cw - 16, 34, 22, it[6], true, 0, 1)
+        if IsObject(prev) {
+            d := DeltaInfo(it[4], it[5])
+            Gp.Text(c, d.txt, cx, y + 62, cw - 20, 34, 16, d.col, true, 2, 1)
+            Gp.Text(c, "previous hour: " . it[3], cx, y + 96, cw - 16, 18, 11, 0xFF9A9AA4, false, 0, 1)
+        } else {
+            Gp.Text(c, "no previous hour yet", cx, y + 96, cw - 16, 18, 11, 0xFF9A9AA4, false, 0, 1)
+        }
+    }
+}
+
 ; kind = "hour" (periodic report) or "stop" (final summary). Returns a PNG path or "".
 ReportCard(kind) {
     try {
         return ReportCardDraw(kind)
     } catch as err {
-        LogMsg("[card] could not draw the report image: " . err.Message)
+        extra := ""
+        try extra := " | " . err.What . " | " . err.Extra . " | line " . err.Line
+        LogMsg("[card] could not draw the report image: " . err.Message . extra)
         return ""
     }
 }
@@ -4128,7 +4206,7 @@ ReportCardDraw(kind) {
     white := 0xFFEDEDED
     blue := 0xFF60A5FA
 
-    c := Gp.Canvas(1000, 560, 0xFF121214)
+    c := Gp.Canvas(1000, 700, 0xFF121214)
     CardChart(c, 24, 24, 632, 276, "MONEY EARNED", money, up, green, t0, true, "$" . Fmt(BotStats.income))
     CardChart(c, 24, 312, 632, 224, "LEVELS GAINED", lvls, up, amber, t0, false, LvlGain(BotStats.levels))
 
@@ -4165,6 +4243,18 @@ ReportCardDraw(kind) {
     Gp.Text(c, APP_NAME . "  v" . APP_VERSION, X, 492, W, 20, 12, blue, true, 1, 1)
     Gp.Text(c, FormatTime(t0, "HH:mm") . " - " . FormatTime(A_Now, "HH:mm") . "  |  " . FormatTime(A_Now, "MMMM d, yyyy")
         , X, 512, W, 20, 11, amber, false, 1, 1)
+
+    ; ---- hourly advantage: this window vs the previous hour (per-hour rates) ----
+    cur := Rates(Hour.catches, Hour.income, Hour.levels, hsec)
+    cmpTitle := "HOURLY ADVANTAGE  -  THIS HOUR VS PREVIOUS HOUR  (per-hour rates)"
+    if (stopKind && hsec < 300) {                        ; too short to be fair: use the whole session
+        cur := Rates(BotStats.catches, BotStats.income, BotStats.levels, up)
+        cmpTitle := "HOURLY ADVANTAGE  -  SESSION VS PREVIOUS HOUR  (per-hour rates)"
+    }
+    prv := PrevHour.valid ? Rates(PrevHour.catches, PrevHour.income, PrevHour.levels, PrevHour.secs) : 0
+    if !PrevHour.valid
+        cmpTitle := "HOURLY RATES  -  comparison starts with the next report"
+    CardCompare(c, 24, 552, 952, 124, cmpTitle, cur, prv)
 
     path := TMP_DIR . "\card_" . FormatTime(, "yyyyMMdd_HHmmss") . ".png"
     return Gp.Save(c, path) ? path : ""

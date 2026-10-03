@@ -1,7 +1,30 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.18.3 below).
+Current delivered file: `BloxFishing.ahk` (v1.18.5 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
+
+---
+
+## v1.18.5: Report card never drew (wrong GDI+ function name)
+
+- **What your log showed:** `[card] could not draw the report image: Call to nonexistent function.` The hourly report went out as the plain text embed, with no image.
+- **Cause:** `Gp.Text` called `GdipSetStringFormatLineAlignment`, which does not exist in gdiplus.dll. The real export is `GdipSetStringFormatLineAlign`. The first text drawn on the card threw, so the card never rendered (in v1.18.0 to v1.18.4). The picture shown earlier was a mock-up of the layout, not output of the macro.
+- **Fix:** the function name. Checked: every other `gdiplus\` function name used by the card and screenshot code is a real export, and no undefined AHK function is called anywhere in the script.
+- **Log:** the `[card]` line now also prints the failing function and line, so if another problem shows up it is named.
+- The "hourly advantage" panel from v1.18.4 is drawn on the same card, so it appears now too.
+- Not tested in the game or on Discord (I cannot run AutoHotkey here).
+
+---
+
+## v1.18.4: Hourly advantage (this hour vs previous hour)
+
+- **New panel on the report card:** fish per hour, money per hour and levels per hour of the current window, each compared with the previous hour (arrow, % change, previous value). Green = better, red = worse.
+- **First report:** there is no previous hour yet, so the panel shows the current rates and says the comparison starts with the next report. A previous window shorter than 5 min is not used as a baseline.
+- **Stop summary:** compares the window since the last report; if that is under 5 min, the whole session is used instead.
+- **Text fallback / embed:** the same comparison is added as a line ("Vs previous hour") so it is also there if the image cannot be drawn.
+- **Log:** if the card cannot be drawn, the log now says the text version was sent instead.
+- Card canvas is now 1000x700.
+- Not tested in the game or on Discord.
 
 ---
 
