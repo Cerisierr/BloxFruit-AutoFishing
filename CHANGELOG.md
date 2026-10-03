@@ -1,6 +1,6 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.9 below).
+Current delivered file: `BloxFishing.ahk` (v1.11 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
 
 ---
@@ -120,6 +120,22 @@ Built from the screenshots you sent. Not yet tested in the game: the script was 
   - The "Fish sold" message now shows `Balance: $before > $after` and attaches the HUD ($ + level) after the sale instead of the dialogue text.
 - **Bait purchase screenshot:** the Craft window is captured just before Craft is pressed (quantity and price visible) and attached to "Bait purchased", which also shows the inventory total. The `hkShot` switch is now labelled "Screenshots (sale, bait, report)". Region: `craftShot` in the code.
 - **"Bait in inventory now" is live:** every bait used or bought updates the field and the saved setting, so the next start resumes from the real count. Editing the field during a run corrects the tracked count.
+- Not tested in the game.
+
+## v1.10: Step away when the cast talks to the NPC
+
+- If the cast click opens the NPC dialogue again (standing too close after the anchor), the macro now closes it and taps W (forward, away from the NPC) for a short time before retrying: 70 ms the first time, +30 ms for each repeat in a row, up to 300 ms. The streak resets after a cast that charges. Tune with `stepAwayTap`, `stepAwayAdd` and `stepAwayMax` in `ShopCfg`.
+- Not tested in the game. If W moves you toward the NPC in your layout, swap `SC_W` for `SC_S` in `StepAwayFromNpc`.
+
+## v1.11: Craft window clicks (+ and Craft not registering)
+
+- **What the video showed:** the Craft window was detected correctly, the money never changed, the quantity stayed at 10 and neither + nor Craft showed any reaction. Only the final Close click (from the error recovery) registered, so the fixed click positions are right but the earlier clicks were not accepted by the game.
+- **Fixes:**
+  - Waits 0.4 s after the Craft window appears, so its pop-up animation has finished.
+  - Craft-window clicks now settle 0.30 s over the button and hold the press 0.12 s (was 0.15 s and 0.06 s), so a low game frame rate cannot miss the click.
+  - Every `+` click is verified: the "10" on the bait icon (`craftQty` region) is compared before and after. If nothing changed, the click is repeated (up to 3 times); if it still does nothing the shop trip stops with a clear error.
+  - The Craft button is pressed up to 4 times, each time waiting 3 s for the window to close (was 6 s).
+- **Log:** new lines show the game area, the exact click positions and whether each `+` click changed the quantity.
 - Not tested in the game.
 
 ---

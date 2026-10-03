@@ -70,6 +70,7 @@ class Mouse {
 }
 
 class Keys {
+    static SC_W := 0x11
     static SC_S := 0x1F
     static SC_LSHIFT := 0x2A
     static DIGITS := Map("1", 0x02, "2", 0x03, "3", 0x04, "4", 0x05, "5", 0x06
@@ -295,7 +296,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.9.0"
+APP_VERSION := "1.11.0"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
@@ -315,6 +316,7 @@ Regions := {
     learn: [0.6753, 0.6482, 0.8573, 0.7458],   ; recipe-note "Learn" button
     catchShot: [0.1500, 0.1200, 0.8500, 0.9000],  ; where the Species/Weight card shows (catch screenshot)
     sale:  [0.2200, 0.6200, 0.7800, 0.9200],   ; strip below the centre where the sale text pops up
+    craftQty: [0.5930, 0.4480, 0.6120, 0.4800],  ; the "10" on the bait icon: changes when + is clicked
     craftShot: [0.2800, 0.2000, 0.7200, 0.7600], ; the Craft window (bait purchase screenshot)
     money: [0.0220, 0.7000, 0.1450, 0.7620],   ; the $ counter digits (bottom-left HUD), "$" sign excluded
     level: [0.0030, 0.7620, 0.1200, 0.8060],   ; "Lv. 868" under the $ counter
@@ -347,7 +349,7 @@ Timing := {
 
 ShopCfg := {
     afterClick: 0.6, afterPlus: 0.25, afterShift: 0.35, afterNevermind: 1.5
-  , afterRod: 0.45, walkBackTap: 0.10, approachWait: 1.2, directTimeout: 0.9
+  , afterRod: 0.45, walkBackTap: 0.10, stepAwayTap: 0.07, stepAwayAdd: 0.03, stepAwayMax: 0.30, approachWait: 1.2, directTimeout: 0.9
   , dialogTimeout: 6.0, craftTimeout: 6.0, rootTimeout: 2.0, rootSettle: 0.9
   , nevermindRetry: 1.4, beforeLeave: 0.7, pageSettle: 0.65, poll: 0.08
   , maxApproach: 2, afterBack: 0.5, confirmTimeout: 6.0, buyAt: 1, craftStep: 10
@@ -391,7 +393,7 @@ BotState := {
   , atNpc: true, bait: -1, sinceSell: 0, lastResponse: 0.0, witness: ""
   , flicked: false, lastEscaped: false, buyFailures: 0, lastBought: 0
   , meterFull: 0, biteInfo: "", zoomedAt: -1, biteMisses: 0
-  , stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: []
+  , npcHits: 0, stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: []
 }
 Meter := {x: 0, top: 0, bot: 0}
 BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
@@ -1999,7 +2001,20 @@ EscapeDialogue() {
     SetRod(true)
     BotState.atNpc := true
     EnterFishingStance()
+    StepAwayFromNpc()
     return true
+}
+
+; The cast click talked to the NPC again: we are standing too close. Each time
+; this happens in a row, walk forward (W, away from the NPC) a little further:
+; 0.07 s, 0.10 s, 0.13 s ... up to 0.30 s. The streak resets on a good cast.
+StepAwayFromNpc() {
+    BotState.npcHits += 1
+    hold := Min(ShopCfg.stepAwayMax, ShopCfg.stepAwayTap + (BotState.npcHits - 1) * ShopCfg.stepAwayAdd)
+    LogMsg("[cast] the cast talked to the NPC again (" . BotState.npcHits . "x) - stepping forward "
+        . Round(hold * 1000) . " ms to get out of range")
+    Keys.Tap(Keys.SC_W, hold)
+    Wait(0.5)
 }
 
 ; One confirmed NPC dialogue is the position reset on F2.
@@ -2100,8 +2115,25 @@ BuyBaitRoute() {
             . " (is it unlocked? is the bait row right?)", "shop")
 
     plus := PtAbs(Points.craftPlus)
+    LogMsg("[shop] craft window up - game area " . BotState.win.x . "," . BotState.win.y . " " . BotState.win.w . "x"
+        . BotState.win.h . ", + at " . plus.x . "," . plus.y . " (" . nPlus . " clicks needed)")
+    Wait(0.4)                                            ; let the window finish its pop-up animation
     Loop nPlus {
-        Mouse.ClickAt(plus.x, plus.y)
+        pressed := false
+        Loop 3 {                                         ; a click is only counted once the quantity changed
+            if !Alive()
+                return false
+            before := QtyGrab()
+            Mouse.ClickAt(plus.x, plus.y, 0.30, 0.12)
+            Wait(0.35)
+            if QtyChanged(before) {
+                pressed := true
+                break
+            }
+            LogMsg("[shop] + click " . A_Index . "/3 changed nothing - clicking again")
+        }
+        if !pressed
+            return ShopFail("the + button did not respond (clicks land at " . plus.x . "," . plus.y . " - check Points.craftPlus)", "shop")
         Wait(ShopCfg.afterPlus)
     }
     shot := BaitShot()                                   ; the Craft window with the final quantity
@@ -2110,8 +2142,9 @@ BuyBaitRoute() {
     Loop 4 {
         if !Alive()
             return false
-        Mouse.ClickAt(craft.x, craft.y)
-        if WaitUntil(() => !CraftUp(), ShopCfg.craftTimeout) {
+        LogMsg("[shop] pressing Craft at " . craft.x . "," . craft.y . " (try " . A_Index . "/4)")
+        Mouse.ClickAt(craft.x, craft.y, 0.30, 0.12)
+        if WaitUntil(() => !CraftUp(), 3.0) {
             closed := true
             break
         }
@@ -2137,6 +2170,33 @@ BuyBaitRoute() {
     EnterFishingStance()
     LogMsg("[shop] done - " . bought . " " . bait.name . " bought")
     return true
+}
+
+; Copy of the quantity area (the "10" on the bait icon) to compare before/after a "+" click.
+QtyGrab() {
+    r := SubRect(BotState.win, Regions.craftQty)
+    gr := ScreenGrab.Get(r.w, r.h)
+    gr.Capture(r.x, r.y)
+    n := r.w * r.h * 4
+    b := Buffer(n)
+    DllCall("RtlMoveMemory", "ptr", b, "ptr", gr.bits, "uptr", n)
+    return {buf: b, w: r.w, h: r.h, x: r.x, y: r.y}
+}
+
+; True when enough pixels of the quantity area differ from the earlier copy.
+QtyChanged(before) {
+    now := QtyGrab()
+    if (now.w != before.w || now.h != before.h)
+        return true
+    diff := 0
+    Loop before.w * before.h {
+        o := (A_Index - 1) * 4
+        a := NumGet(before.buf, o, "UInt"), c := NumGet(now.buf, o, "UInt")
+        d := Abs(((a >> 16) & 255) - ((c >> 16) & 255)) + Abs(((a >> 8) & 255) - ((c >> 8) & 255)) + Abs((a & 255) - (c & 255))
+        if (d > 90)
+            diff++
+    }
+    return diff >= 8
 }
 
 ; Screenshot of the Craft window just before Craft is pressed (quantity + price visible).
@@ -2330,6 +2390,7 @@ DoCast() {
                     . "%) after " . Round(elapsed, 2) . " s"
                     . (perfect ? (byPlateau ? " - bar saturated" : " - top reached")
                                : " - never reached " . Round(thr * 100) . "%, released anyway"))
+            BotState.npcHits := 0
             Tally("casts")
             LogMsg("[cast] #" . BotStats.casts . (attempt == 1 ? "" : " (attempt " . attempt . ")"))
             HookCast(Cfg.perfect ? Round(level * 100) : -1)
@@ -2707,6 +2768,7 @@ RunBot() {
     BotState.zoomedAt := -1
     BotState.biteMisses := 0
     BotState.buyFailures := 0
+    BotState.npcHits := 0
     BotState.stopReason := ""
     BotState.levelStart := -1
     BotState.levelLast := -1
