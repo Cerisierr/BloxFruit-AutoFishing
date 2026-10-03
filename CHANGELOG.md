@@ -1,7 +1,7 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.4 below).
-Work that was started afterwards (see "Not delivered") is **not** in that file.
+Current delivered file: `BloxFishing.ahk` (v1.6 below).
+Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
 
 ---
 
@@ -47,34 +47,61 @@ Work that was started afterwards (see "Not delivered") is **not** in that file.
   - The status line shows `catches | bait | sale in N`.
   - A failed shop trip logs what the screen looked like.
 
-## v1.4: Latest delivered file
+## v1.4
 
 - Label change only: "Bait per purchase (x10)" became "Bait per purchase".
   Enter the real number: 10 for 10 bait, 20 for 20 bait.
-- **Known bug in this version:** values from 1 to 9 are rounded up to 10, so a value of 2 buys 10 bait, not 20.
+- **Known bug in this version:** values from 1 to 9 are rounded up to 10, so a value of 2 buys 10 bait, not 20 (still open, see the end of this file).
 
 ---
 
-## Findings from your screenshots (not yet in the file)
+## v1.5: Cast fix, bait, NPCs, webhook, new window
 
-- **Cast meter colour shows the charge:** orange is low, yellow is mid, green is full.
-- **Meter position:** zoomed out, the bar sits low on screen, outside my search area. This is why the perfect cast kept failing.
-- **Bait counter:** bait is counted at "hooked", even when the reel bar never appears. It should only count when the reel bar appears.
-- **Two NPCs:**
-  - The **Fisherman** sells fish and Basic Bait.
-  - The **Angler** sells the other baits and cannot buy fish.
-  - The Angler's menu is: Rods (locked), Bait, Quest, Nevermind.
-  - The Angler's bait page is: Basic Bait, LOCKED, LOCKED, Back. Locked rows are lighter grey and need their own detection.
-- **Choosing the NPC:** you have to pick which NPC to AFK next to. Selling and advanced baits cannot both happen at one spot.
+Built from the screenshots you sent. Not yet tested in the game: the script was only checked statically (brackets, duplicate or missing functions).
 
-## Requested, not delivered
+- **Perfect cast (fixed at the root):**
+  - The meter fill is orange at the bottom, then yellow, then green. The old reader only accepted green and yellow, so it never saw the bar fill or drain.
+  - The meter is now found by its fill colours and measured against its own track (black outline, dark inside), so the camera distance no longer matters.
+  - The macro reads the fill level every tick and releases when it reaches the chosen percentage (default 97%). The bar bounces, so a missed rise is not a problem: it waits for the next one.
+  - If the bar stops just under the threshold, it releases after it has stayed still for 0.12 s.
+  - Maximum hold is 5 s. Default zoom-out is now 8 notches.
+- **Bait counting:** bait is now used up only when the reel bar really appears. "bar never appeared" no longer costs bait.
+- **Choice of bait:** Basic, Kelp, Good (Sea 1), Abyssal, Frozen (Sea 2), Epic, Carnivore (Sea 3), with the price per 10 and the extra item (Demonic Wisp, Yeti Fur, Terror Eyes, Dragon Scale). The window shows the pack count and total cost.
+- **Choice of NPC:**
+  - The **Fisherman** buys bait and fish.
+  - The **Angler** sells bait only. Auto-sell is switched off when the Angler is selected.
+  - Angler path: Bait, then the bait row, then the craft window. The way out clicks the bottom row (Back, then Nevermind).
+- **Menu detection:** buttons are now also found by their outline (4 px of pure black for an active button, grey 72 for a LOCKED one), because the fill colour changes with the scenery behind the buttons. The better of the two results is used.
+- **Discord webhook (new page):**
+  - Settings: on/off, URL (hidden by default), display name, optional user ID to mention on errors, "Send test".
+  - Events: started, stopped with a session summary, fish sold, bait purchased, errors and safety stops, hourly report.
+  - A screenshot of the strip below the screen centre is taken right after each sale and attached to the "Fish sold" message.
+  - Sending uses `curl.exe`. The window shows "delivered (HTTP 204)" or "FAILED" about 5 s after each send.
+- **Hourly Report:** money generated, bait bought and money spent, fish caught, net profit, casts and escapes, fish per hour, session totals. The interval is adjustable. "Send report now" sends it immediately.
+- **Income:** read from the $ counter (bottom-left) with the Windows built-in OCR, before and after each sale. If that fails, the macro tries to read the sale screenshot instead.
+- **New window:** sidebar with Dashboard, Fishing, Shop and Bait, Webhook and Appearance; stat tiles; 7 themes (Midnight, Obsidian, Ocean, Emerald, Sunset, Rose, Daylight); switches instead of checkboxes; settings saved automatically.
+- The window is no longer "always on top", so it cannot hide the game area the macro reads.
 
-- Redesigned window with themes.
-- Discord webhook with its own settings page.
-- Hourly Report: money earned, bait bought and money spent, fish caught.
-- Screenshot of the sale text after each sale.
-- Choice of which bait to buy (Sea 1, 2 and 3 baits).
-- Choice of AFK NPC (Fisherman or Angler).
-- Correct bait counting (only when the reel bar appears).
-- Fix for the bait-per-purchase rounding.
-- Cast meter fix based on the colour-coded fill.
+## v1.6: Levels, report screenshot, title fix
+
+- **Level tracking:** the level ("Lv. 868", under the $ counter) is read with OCR at start, every 5 minutes between casts, and just before each hourly report. Levels gained are counted and shown on a new Dashboard tile, in the start message, the stop summary and the hourly report. A jump of more than 25 is treated as an OCR error. A "Track levels" switch is on the Shop and Bait page.
+- **Hourly report screenshot:** the report now also attaches a screenshot of the bottom-left block (money and level).
+- **Window:** the large titles, the sidebar name and the tile numbers were cut off because their text boxes were too short. They are taller now.
+- The version number shown in the window is now 1.6.0.
+
+---
+
+## Findings from your screenshots
+
+- **Cast meter colour shows the charge:** orange is low, yellow is mid, green is full. (Used in v1.5.)
+- **Meter position:** zoomed out, the bar sits low on screen. Fixed in v1.5 by measuring the track instead of using a fixed size.
+- **Two NPCs:** the Fisherman sells fish and Basic Bait. The Angler sells the other baits and cannot buy fish. Its menu is Rods (locked), Bait, Quest, Nevermind; its bait page is Basic Bait, LOCKED, LOCKED, Back.
+
+## Open points (to check in the game)
+
+- **Bait per purchase 1 to 9:** the minimum purchase is one pack of 10, so 1 to 9 still become 10. If you meant "2 = two packs (20 bait)", tell me and I will change the field to count packs.
+- **OCR:** money and level reading depend on Windows OCR reading the game font. If a sale says "unreadable", send me a screenshot of the bottom-left HUD.
+- **Webhook screenshots:** the attachments have not been seen arriving on a real Discord channel yet.
+- **Bait menu order:** I assumed Basic first, then the two baits of that sea in the order you listed. Override with `baitRow=` (1 to 3) in the `[shop]` section of `BloxFishing.ini`.
+- **Craft window for baits that need an item:** only the Basic Bait layout is known, so the "+" and Craft button positions may need adjusting.
+- **Selected bait:** if the game does not select a newly bought bait by itself, it has to be selected by hand.

@@ -295,7 +295,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.0.0"
+APP_VERSION := "1.7.0"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
@@ -312,7 +312,11 @@ Regions := {
     meterWide: [0.1800, 0.2200, 0.8200, 0.8800], ; fallback if the camera was moved
     menu:  [0.6700, 0.3600, 0.9500, 0.7800],   ; NPC button stack
     craft: [0.4020, 0.5769, 0.6020, 0.7162],   ; yellow Craft button
-    learn: [0.6753, 0.6482, 0.8573, 0.7458]    ; recipe-note "Learn" button
+    learn: [0.6753, 0.6482, 0.8573, 0.7458],   ; recipe-note "Learn" button
+    sale:  [0.2200, 0.6200, 0.7800, 0.9200],   ; strip below the centre where the sale text pops up
+    money: [0.0030, 0.7000, 0.1450, 0.7620],   ; the $ counter (bottom-left HUD)
+    level: [0.0030, 0.7620, 0.1200, 0.8060],   ; "Lv. 868" under the $ counter
+    hud:   [0.0000, 0.6950, 0.2000, 0.8100]    ; $ + level block, attached to the hourly report
 }
 
 ; Click points as fractions of the game window: [x, y].
@@ -330,12 +334,13 @@ Points := {
 
 ; Timings in seconds (same defaults as the Python build).
 Timing := {
-    castHold: 1.20, releaseLead: 0.0, castSettle: 1.60, maxCastAttempts: 4, castRetryGap: 0.45
+    castHold: 5.00, releaseLead: 0.0, castSettle: 1.60, maxCastAttempts: 4, castRetryGap: 0.45
   , biteClickDelay: 0.05, biteToBar: 5.0, maxWaitBite: 30.0, maxReel: 12.0
   , flickGap: 0.08, flickSlowDelay: 0.50, flickSlowGap: 0.50, flickSettle: 0.50
   , catchConfirm: 0.30, popupDelay: 1.60, catchClickGap: 0.35, catchSettle: 0.55
   , barClear: 3.0, barLost: 0.9, errorRecovery: 1.0, responseTimeout: 300.0
   , chestHold: 2.5, chestGrace: 1.5, chestMinProgress: 0.20, chestMaxGrabs: 4
+  , shotDelay: 0.50
 }
 
 ShopCfg := {
@@ -346,20 +351,33 @@ ShopCfg := {
   , maxApproach: 2, afterBack: 0.5, confirmTimeout: 6.0, buyAt: 1, craftStep: 10
 }
 
-; NPC menu structure: rows are 1-based from the top, -1 = bottom row.
-MENU_ROWS := Map(
-    "root",    Map("shop", 1, "fishing_index", 2, "job_stats", 3, "nevermind", -1),
-    "shop",    Map("buy_bait", 1, "sell_fish", 2, "nevermind", -1),
-    "bait",    Map("basic_bait", 1, "back", -1),
-    "confirm", Map("confirm", 1, "nevermind", -1))
-PAGE_ROWS := Map("root", 4, "shop", 3, "bait", 2, "confirm", 2)
+; ---- baits ------------------------------------------------------------------
+; price = money for one pack of 10 bait, item = extra material needed per pack
+; (Sea 2 / Sea 3), slot = row of the bait inside the NPC's Bait menu: Basic Bait
+; is always first, then the two baits of that sea. If your menu is ordered
+; differently, set  baitRow=  (1..3) in the [shop] section of BloxFishing.ini.
+BAITS := [
+    {name: "Basic Bait",     sea: 1, price: 1000,  item: "",             slot: 1}
+  , {name: "Kelp Bait",      sea: 1, price: 12000, item: "",             slot: 2}
+  , {name: "Good Bait",      sea: 1, price: 8000,  item: "",             slot: 3}
+  , {name: "Abyssal Bait",   sea: 2, price: 25000, item: "Demonic Wisp", slot: 2}
+  , {name: "Frozen Bait",    sea: 2, price: 36000, item: "Yeti Fur",     slot: 3}
+  , {name: "Epic Bait",      sea: 3, price: 50000, item: "Terror Eyes",  slot: 2}
+  , {name: "Carnivore Bait", sea: 3, price: 60000, item: "Dragon Scale", slot: 3}
+]
+NPC_LIST := ["Fisherman", "Angler"]
 
 ; User-adjustable settings (persisted in BloxFishing.ini, edited in the GUI).
 Cfg := {
     resolution: "Auto", rodSlot: "4", fastBite: false, slowFlick: false
-  , chest: true, anchor: true, buyBait: true, baitNow: 0, baitPer: 40
-  , sellOn: true, sellEvery: 100, flick: true, perfect: true
-  , zoomLock: true, zoomOut: 5, zoomEvery: 5
+  , chest: true, anchor: true, flick: true, perfect: true, perfectPct: 97
+  , zoomLock: true, zoomOut: 8, zoomEvery: 5
+  , npc: "Fisherman", buyBait: true, baitType: "Basic Bait", baitNow: 0, baitPer: 40, baitRow: 0
+  , sellOn: true, sellEvery: 100, trackIncome: true, trackLevel: true
+  , theme: "Midnight"
+  , hkOn: false, hkUrl: "", hkName: "Blox Fishing Macro", hkMention: ""
+  , hkStart: true, hkStop: true, hkSale: true, hkShot: true, hkBait: true
+  , hkHourly: true, hkEveryMin: 60, hkErr: true
 }
 
 ; Runtime state.
@@ -370,10 +388,68 @@ BotState := {
   , atNpc: true, bait: -1, sinceSell: 0, lastResponse: 0.0, witness: ""
   , flicked: false, lastEscaped: false, buyFailures: 0, lastBought: 0
   , meterFull: 0, biteInfo: "", zoomedAt: -1, biteMisses: 0
+  , stopReason: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false
 }
-Meter := {x: 0, bottom: 0}
+Meter := {x: 0, top: 0, bot: 0}
 BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
-           , biteTimeouts: 0, sales: 0, purchases: 0, started: 0.0}
+           , biteTimeouts: 0, sales: 0, purchases: 0, baitBought: 0, spent: 0
+           , income: 0, unreadable: 0, levels: 0, started: 0.0, lastUp: 0.0}
+Hour := {started: 0.0}                                  ; counters since the last hourly report
+
+CurBait() {
+    for b in BAITS {
+        if (b.name == Cfg.baitType)
+            return b
+    }
+    return BAITS[1]
+}
+
+BaitLabel(b) {
+    t := b.name . "   -   Sea " . b.sea . "   -   $" . Fmt(b.price) . " / 10"
+    if (b.item != "")
+        t .= " + " . b.item
+    return t
+}
+
+; NPC menu rows: 1-based from the top, -1 = bottom row (Back / Nevermind).
+;   Fisherman root : Shop, Fishing Index, Job Stats, Nevermind
+;   Fisherman shop : Buy Bait, Sell Fish, Nevermind
+;   Angler root    : Rods, Bait, Quest, Nevermind        (cannot buy fish)
+;   Bait page      : the baits of the sea ... , Back
+MenuRow(page, action) {
+    if (action == "nevermind" || action == "back")
+        return -1
+    switch page {
+        case "root":
+            if (Cfg.npc == "Angler")
+                return (action == "bait") ? 2 : (action == "quest") ? 3 : 1
+            return (action == "shop") ? 1 : (action == "fishing_index") ? 2 : 3
+        case "shop":
+            return (action == "buy_bait") ? 1 : 2
+        case "bait":
+            return (Cfg.baitRow > 0) ? Cfg.baitRow : CurBait().slot
+        case "confirm":
+            return 1
+    }
+    return 1
+}
+
+; Number of buttons on each page (used to recognise a settled page).
+PageRows(page) {
+    switch page {
+        case "root":
+            return 4
+        case "shop":
+            return 3
+        case "confirm":
+            return 2
+        case "bait":
+            if (Cfg.npc == "Angler")
+                return 4
+            return (CurBait().slot == 1) ? 2 : 4
+    }
+    return 2
+}
 
 QPF := 0
 DllCall("QueryPerformanceFrequency", "Int64*", &QPF)
@@ -422,7 +498,7 @@ Alive() {
     if (Timing.responseTimeout > 0 && Now() - BotState.lastResponse > Timing.responseTimeout) {
         LogMsg("[safety] no confirmed game response for "
             . Round(Timing.responseTimeout) . " s - stopping")
-        BotState.running := false
+        Halt("no confirmed game response for " . Round(Timing.responseTimeout) . " s")
         return false
     }
     return true
@@ -432,8 +508,59 @@ NoteResponse() {
     BotState.lastResponse := Now()
 }
 
+; Stop the run from inside the engine and remember why (shown in the webhook).
+Halt(reason) {
+    BotState.running := false
+    if (BotState.stopReason == "")
+        BotState.stopReason := reason
+    LogMsg("[stop] " . reason)
+}
+
+; Count into both the session totals and the current hourly-report window.
+Tally(field, n := 1) {
+    BotStats.%field% += n
+    Hour.%field% += n
+}
+
+ResetHour() {
+    for k in ["casts", "catches", "escapes", "sales", "purchases", "baitBought", "spent"
+            , "income", "unreadable", "levels", "bites", "missedBar", "biteTimeouts"]
+        Hour.%k% := 0
+    Hour.started := Now()
+}
+
+; 1234567 -> "1,234,567"
+Fmt(n) {
+    try {
+        v := Integer(n)
+    } catch {
+        return String(n)
+    }
+    s := String(Abs(v))
+    out := ""
+    while (StrLen(s) > 3) {
+        out := "," . SubStr(s, -3) . out
+        s := SubStr(s, 1, StrLen(s) - 3)
+    }
+    return (v < 0 ? "-" : "") . s . out
+}
+
+; seconds -> "1h 05m" / "7m 12s"
+FmtDur(sec) {
+    sec := Max(0, Round(sec))
+    h := sec // 3600
+    m := Mod(sec // 60, 60)
+    s := Mod(sec, 60)
+    if (h > 0)
+        return h . "h " . Format("{:02}", m) . "m"
+    return m . "m " . Format("{:02}", s) . "s"
+}
+
 LogMsg(msg) {
     line := FormatTime(, "HH:mm:ss") . "  " . msg
+    BotState.logBuf .= line . "`r`n"
+    if (StrLen(BotState.logBuf) > 24000)
+        BotState.logBuf := SubStr(BotState.logBuf, -12000)
     try {
         if Ui.HasOwnProp("log") {
             len := SendMessage(0x000E, 0, 0, Ui.log)         ; WM_GETTEXTLENGTH
@@ -980,96 +1107,185 @@ BiteNow() {
     return false
 }
 
-; The charge bar's fill is not one colour: it is bright green (~31,249,16) and
-; shades to yellow-green / yellow (~183,195,0 .. 240,255,0) as it fills.
+; ---- cast charge meter -------------------------------------------------------
+; The meter is a dark vertical track with a black outline. Its fill grows upward
+; from the bottom and changes colour as it charges: ORANGE (255,151,0) at the
+; bottom -> yellow -> green at the top. The bar then bounces back down, so the
+; only reliable signal is the fill level measured against the track height.
 IsMeterFill(c) {
     rr := (c >> 16) & 255
     gg := (c >> 8) & 255
     bb := c & 255
-    return bb < 90 && gg > 140 && rr <= gg + 25
+    mx := Max(rr, gg)
+    return bb < 90 && mx > 140 && (mx - bb) > 110
+}
+
+IsMeterEdge(c) {                                       ; the black outline
+    return Max((c >> 16) & 255, (c >> 8) & 255, c & 255) <= 32
+}
+
+IsMeterTrack(c) {                                      ; empty track: dark neutral blue-grey
+    rr := (c >> 16) & 255
+    gg := (c >> 8) & 255
+    bb := c & 255
+    mx := Max(rr, gg, bb)
+    return mx > 32 && mx <= 125 && (mx - Min(rr, gg, bb)) <= 40
 }
 
 MeterReset() {
     Meter.x := 0
-    Meter.bottom := 0
+    Meter.top := 0
+    Meter.bot := 0
 }
 
-; Cast charge meter: a vertical bar beside the character. Returns the fill
-; height in px (0 = not charging). The bar grows upward from a fixed bottom, so
-; once located only a thin strip above that bottom is read each tick.
-MeterRead() {
+; Measure the track around a seed pixel that has a fill colour. Stores the track
+; geometry in Meter and returns true, or returns false for look-alikes (yellow
+; clothes, a hat ...): a real meter has a black outline on both sides and above.
+MeterMeasure(sx, sy) {
     win := BotState.win
-    stripH := Round(win.h * 0.50)                     ; never clip a full bar
-    need := Max(10, Round(win.h * 0.03))
-    if (Meter.x > 0) {
-        y0 := Max(0, Meter.bottom - stripH + 1)
-        n := Meter.bottom - y0 + 1
-        gr := ScreenGrab.Get(1, stripH)
-        gr.Capture(Meter.x, y0)
-        i := n - 1, hgt := 0, miss := 0
-        while (i >= 0) {
-            if IsMeterFill(NumGet(gr.bits, i * 4, "UInt")) {
-                hgt := n - i
-                miss := 0
-            } else if (++miss > 3) {
-                break
-            }
-            i--
-        }
-        if (hgt >= need)
-            return hgt
-        MeterReset()                                   ; lost it: search again
-    }
+    H := win.h
+    ys := sy - win.y
+    if (ys < 0 || ys >= H)
+        return false
+    gr := ScreenGrab.Get(1, H)
+    gr.Capture(sx, win.y)
+    bits := gr.bits
 
-    h := MeterFind(Regions.meter, stripH, need)
-    if !h
-        h := MeterFind(Regions.meterWide, stripH, need)
-    return h
+    ; up to the top outline
+    y := ys, miss := 0, top := -1
+    while (y >= 0) {
+        c := NumGet(bits, y * 4, "UInt")
+        if IsMeterEdge(c) {
+            edgeLow := y
+            top := edgeLow + 1                         ; first interior row
+            break
+        }
+        if (IsMeterFill(c) || IsMeterTrack(c)) {
+            miss := 0
+        } else if (++miss > 2) {
+            return false
+        }
+        y--
+    }
+    if (top < 0)
+        return false
+
+    ; down to the bottom outline (or the last bar-coloured row if it is hidden)
+    y := ys, miss := 0
+    bot := -1, lastBar := ys
+    while (y < H) {
+        c := NumGet(bits, y * 4, "UInt")
+        if IsMeterEdge(c) {
+            bot := y - 1
+            break
+        }
+        if (IsMeterFill(c) || IsMeterTrack(c)) {
+            lastBar := y
+            miss := 0
+        } else if (++miss > 2) {
+            bot := lastBar
+            break
+        }
+        y++
+    }
+    if (bot < 0)
+        bot := lastBar
+    hgt := bot - top + 1
+    if (hgt < Round(H * 0.07) || hgt > Round(H * 0.40))
+        return false
+
+    ; width: an outline on both sides of the seed
+    half := Round(win.w * 0.025)
+    rowW := half * 2 + 1
+    gr2 := ScreenGrab.Get(rowW, 1)
+    gr2.Capture(sx - half, sy)
+    left := -1, right := -1
+    i := half
+    while (i >= 0) {
+        if IsMeterEdge(NumGet(gr2.bits, i * 4, "UInt")) {
+            left := i
+            break
+        }
+        i--
+    }
+    i := half
+    while (i < rowW) {
+        if IsMeterEdge(NumGet(gr2.bits, i * 4, "UInt")) {
+            right := i
+            break
+        }
+        i++
+    }
+    if (left < 0 || right < 0)
+        return false
+    wid := right - left
+    if (wid < Round(win.w * 0.004) || wid > Round(win.w * 0.022))
+        return false
+
+    Meter.x := sx - half + (left + right) // 2
+    Meter.top := win.y + top
+    Meter.bot := win.y + bot
+    return true
 }
 
-; Locate the bar inside one region (native PixelSearch for the fill colours,
-; then one thin strip to measure it). Skips look-alikes such as yellow clothes.
-MeterFind(fr, stripH, need) {
+; Locate the meter inside one region: native PixelSearch for the fill colours
+; (orange, dark orange, amber, yellow, yellow-green, green), top-most hit first.
+MeterFind(fr) {
     win := BotState.win
     r := SubRect(win, fr)
     x1 := r.x, y1 := r.y
     x2 := r.x + r.w, y2 := r.y + r.h
-    tol := 35
-    Loop 25 {
+    cols := [0xFF9700, 0xCA7700, 0xFFCC00, 0xF0FF00, 0xB7C300, 0x1FF910]
+    Loop 60 {
         top := 99999, tx := 0
-        for col in [0x1FF910, 0xF0FF00, 0xB7C300] {
-            if PixelSearch(&fx, &fy, x1, y1, x2, y2, col, tol) && fy < top {
+        for col in cols {
+            if PixelSearch(&fx, &fy, x1, y1, x2, y2, col, 30) && fy < top {
                 top := fy
                 tx := fx
             }
         }
         if (top == 99999)
-            return 0
-        xc := tx + Round(7 * BotState.sc)
-        y0c := Min(top, win.y + win.h - stripH)        ; keep the whole strip on screen
-        off := top - y0c
-        n := Min(stripH - off, win.y + win.h - top)
-        gr := ScreenGrab.Get(1, stripH)
-        gr.Capture(xc, y0c)
-        hgt := 0, miss := 0
-        Loop n {
-            if IsMeterFill(NumGet(gr.bits, (off + A_Index - 1) * 4, "UInt")) {
-                hgt := A_Index
-                miss := 0
-            } else if (++miss > 3) {
-                break
-            }
-        }
-        if (hgt >= need) {
-            Meter.x := xc
-            Meter.bottom := top + hgt - 1
-            return hgt
-        }
-        y1 := top + 6                                  ; false hit: look below it
+            return false
+        if MeterMeasure(tx, top)
+            return true
+        y1 := top + 8                                  ; false hit: look below it
         if (y1 >= y2)
             break
     }
-    return 0
+    return false
+}
+
+; Fill level 0..1 (1 = completely full), or -1 when no meter is on screen.
+; Once located, only a 1-px wide column through the track is read per tick.
+MeterRead() {
+    Loop 2 {
+        if (Meter.x > 0) {
+            h := Meter.bot - Meter.top + 1
+            gr := ScreenGrab.Get(1, h)
+            gr.Capture(Meter.x, Meter.top)
+            bits := gr.bits
+            mid := NumGet(bits, (h // 2) * 4, "UInt")
+            if (IsMeterFill(mid) || IsMeterTrack(mid)) {
+                fillTop := h, miss := 0, seen := false
+                i := h - 1
+                while (i >= 0) {
+                    if IsMeterFill(NumGet(bits, i * 4, "UInt")) {
+                        fillTop := i
+                        seen := true
+                        miss := 0
+                    } else if (++miss > 3) {
+                        break
+                    }
+                    i--
+                }
+                return seen ? (h - fillTop) / h : 0.0
+            }
+            MeterReset()                               ; track vanished: search again
+        }
+        if !(MeterFind(Regions.meter) || MeterFind(Regions.meterWide))
+            return -1
+    }
+    return -1
 }
 
 ; Recipe note: navy "Learn" button carrying white text.
@@ -1194,7 +1410,7 @@ IsPanelFill(rr, gg, bb) {
     return Abs(rr - 27) <= 10 && Abs(gg - 35) <= 9 && Abs(bb - 40) <= 8   ; covers 21..37 / 26..44 / 32..48
 }
 
-MenuPanels() {
+MenuPanelsFill() {
     win := BotState.win
     r := SubRect(win, Regions.menu)
     gr := ScreenGrab.Get(r.w, r.h)
@@ -1303,6 +1519,96 @@ MenuPanels() {
                 j--
             }
             panels[j + 1] := key
+        }
+    }
+    return panels.Length >= 2 ? panels : []
+}
+
+; Menu buttons, found two ways. The fill colour changes with the scenery behind
+; the (translucent) buttons, but the outline does not: 4 px of pure black for
+; an active button, neutral grey 72 for a LOCKED one. The better result wins.
+MenuPanels() {
+    a := MenuPanelsFill()
+    b := MenuPanelsBorder()
+    if (Cfg.npc == "Angler")
+        return (b.Length >= a.Length) ? b : a
+    return (a.Length >= b.Length) ? a : b
+}
+
+MenuPanelsBorder() {
+    win := BotState.win
+    r := SubRect(win, Regions.menu)
+    gr := ScreenGrab.Get(r.w, r.h)
+    gr.Capture(r.x, r.y)
+    bits := gr.bits
+    w := r.w, h := r.h
+    colStep := 4
+    cols := (w + colStep - 1) // colStep
+    need := Max(8, Floor(cols * 0.30))
+    maxThick := Max(6, Round(win.h * 0.009))
+
+    ; ---- 1. horizontal outline lines ---------------------------------------
+    groups := []
+    gs := -1, gl := -1, gxs := 0, gxe := 0
+    y := 0
+    while (y <= h) {
+        on := false
+        xs := -1, xe := -1
+        if (y < h) {
+            n := 0
+            base := y * w * 4
+            x := 0
+            while (x < w) {
+                v := NumGet(bits, base + x * 4, "UInt")
+                rr := (v >> 16) & 255
+                gg := (v >> 8) & 255
+                bb := v & 255
+                if (Max(rr, gg, bb) <= 8
+                    || (Abs(rr - 72) <= 5 && Abs(gg - 72) <= 5 && Abs(bb - 72) <= 5)) {
+                    n++
+                    if (xs < 0)
+                        xs := x
+                    xe := x
+                }
+                x += colStep
+            }
+            on := (n >= need)
+        }
+        if on {
+            if (gs < 0) {
+                gs := y
+                gxs := xs
+                gxe := xe
+            } else {
+                gxs := Min(gxs, xs)
+                gxe := Max(gxe, xe)
+            }
+            gl := y
+        } else if (gs >= 0 && (y >= h || y - gl > 3)) {
+            if (gl - gs + 1 <= maxThick)                ; thick black areas are not outlines
+                groups.Push({s: gs, e: gl, xs: gxs, xe: gxe})
+            gs := -1
+        }
+        y++
+    }
+
+    ; ---- 2. top line + bottom line = one button -----------------------------
+    panels := []
+    pmin := win.h * 0.060
+    pmax := win.h * 0.100
+    i := 1
+    while (i < groups.Length) {
+        a := groups[i]
+        b := groups[i + 1]
+        span := b.e - a.s + 1
+        if (span >= pmin && span <= pmax) {
+            xs := Min(a.xs, b.xs)
+            xe := Max(a.xe, b.xe)
+            panels.Push({x: r.x + xs + Round((xe - xs) * 0.40), y: r.y + (a.s + b.e) // 2
+                       , top: a.s, bot: b.e})
+            i += 2
+        } else {
+            i++
         }
     }
     return panels.Length >= 2 ? panels : []
@@ -1469,7 +1775,7 @@ EnterFishingStance() {
 
 ; Wait until a complete, settled menu page is showing.
 WaitMenuPage(page, timeout) {
-    expected := PAGE_ROWS[page]
+    expected := PageRows(page)
     poll := Max(0.03, ShopCfg.poll)
     deadline := Now() + timeout
     if (BotState.witness != "" && BotState.witness.page == page) {
@@ -1506,7 +1812,7 @@ WaitMenuPage(page, timeout) {
 ; ordinal dots as a last resort.
 ClickMenuAction(page, action) {
     BotState.witness := ""
-    index := MENU_ROWS[page][action]
+    index := MenuRow(page, action)
     panels := MenuPanels()
     if panels.Length {
         chosen := index < 0 ? panels.Length + index + 1 : index
@@ -1615,12 +1921,17 @@ OpenNpcDialogue() {
     return false
 }
 
-; Back -> Nevermind, waiting for each page instead of sleeping blindly.
+; Leave the dialogue. Fisherman: Back -> Nevermind, waiting for each page.
+; Angler (or any layout where the bait page and the root page look alike): the
+; bottom row is "Back" on the bait page and "Nevermind" on the root page, so
+; clicking it repeatedly walks out either way.
 LeaveDialogue(tries := 3) {
     Wait(ShopCfg.beforeLeave)
     if !WaitUntil(() => MenuPanels().Length >= 2, ShopCfg.rootTimeout)
         return !InDialogue()
-    if (MenuPanels().Length < 4) {
+    if (PageRows("bait") == PageRows("root"))
+        return LeaveByBottomRow()
+    if (MenuPanels().Length < PageRows("root")) {
         ClickMenuAction("bait", "back")
         if !WaitMenuPage("root", ShopCfg.rootTimeout)
             return false
@@ -1632,8 +1943,23 @@ LeaveDialogue(tries := 3) {
         ClickMenuAction("root", "nevermind")
         if WaitUntil(() => !InDialogue(), ShopCfg.nevermindRetry)
             return true
-        if (MenuPanels().Length >= 4)
+        if (MenuPanels().Length >= PageRows("root"))
             Wait(ShopCfg.afterBack)
+    }
+    if InDialogue()
+        LogMsg("[shop] could not close the dialogue - stopping this shop route")
+    return !InDialogue()
+}
+
+LeaveByBottomRow() {
+    Loop 5 {
+        if (!Alive() || !InDialogue())
+            return true
+        Wait(ShopCfg.pageSettle)
+        ClickMenuAction("root", "nevermind")
+        if WaitUntil(() => !InDialogue(), ShopCfg.nevermindRetry)
+            return true
+        Wait(ShopCfg.afterBack)
     }
     if InDialogue()
         LogMsg("[shop] could not close the dialogue - stopping this shop route")
@@ -1708,36 +2034,56 @@ BuyBait() {
     ok := BuyBaitRoute()
     if ok {
         BotState.buyFailures := 0
-        BotState.bait := Max(0, BotState.bait) + BotState.lastBought
-        BotStats.purchases += 1
+        BotState.bait := Min(100, Max(0, BotState.bait) + BotState.lastBought)
         LogMsg("[bait] topped up to " . BotState.bait)
         return
     }
     BotState.buyFailures += 1
-    if (BotState.buyFailures >= 3) {
-        LogMsg("[shop] could not restock bait after 3 attempts - stopping")
-        BotState.running := false
-    }
+    if (BotState.buyFailures >= 3)
+        Halt("could not restock bait after 3 attempts")
 }
 
+; Buy Cfg.baitPer bait of the selected type. The craft window starts at one
+; pack (10 bait) and each "+" adds another pack, so 40 bait = 3 "+" clicks.
 BuyBaitRoute() {
-    amount := Cfg.baitPer
+    bait := CurBait()
     step := Max(1, ShopCfg.craftStep)
-    nPlus := Max(0, (amount // step) - 1)
-    bought := step * (nPlus + 1)
-    LogMsg("[shop] buying x" . bought . " bait (" . nPlus . " '+' clicks)")
+    ; The inventory holds 100 bait at most: only buy what still fits.
+    room := 100 - Max(0, BotState.bait)
+    want := Min(Cfg.baitPer, room)
+    packs := want // step
+    if (packs < 1) {
+        LogMsg("[shop] inventory full (" . Max(0, BotState.bait) . "/100 bait) - nothing to buy")
+        BotState.lastBought := 0
+        return true
+    }
+    if (want < Cfg.baitPer)
+        LogMsg("[shop] wanted " . Cfg.baitPer . " but only " . want . " fit (" . Max(0, BotState.bait) . "/100 in stock)")
+    nPlus := packs - 1
+    bought := step * packs
+    cost := packs * bait.price
+    LogMsg("[shop] buying x" . bought . " " . bait.name . " at the " . Cfg.npc
+        . " (" . packs . " pack" . (packs == 1 ? "" : "s") . ", $" . Fmt(cost)
+        . (bait.item != "" ? " + " . packs . " " . bait.item : "") . ")")
 
     if !OpenNpcDialogue()
         return ShopFail("NPC dialogue never opened", "shop")
-    if !ClickActionUntil("root", "shop", () => MenuPanels().Length == 3
-            , 4, ShopCfg.afterClick + 0.6, "shop")
-        return ShopFail("Shop page never appeared", "shop")
-    if !ClickActionUntil("shop", "buy_bait", () => MenuPanels().Length == 2
-            , 4, ShopCfg.afterClick + 0.6, "bait")
-        return ShopFail("Buy Bait page never appeared", "shop")
-    if !ClickActionUntil("bait", "basic_bait", () => CraftUp()
+    if (Cfg.npc == "Angler") {
+        if !ClickActionUntil("root", "bait", () => MenuPanels().Length == PageRows("bait")
+                , 4, ShopCfg.afterClick + 0.6, "bait")
+            return ShopFail("Bait page never appeared", "shop")
+    } else {
+        if !ClickActionUntil("root", "shop", () => MenuPanels().Length == PageRows("shop")
+                , 4, ShopCfg.afterClick + 0.6, "shop")
+            return ShopFail("Shop page never appeared", "shop")
+        if !ClickActionUntil("shop", "buy_bait", () => MenuPanels().Length == PageRows("bait")
+                , 4, ShopCfg.afterClick + 0.6, "bait")
+            return ShopFail("Buy Bait page never appeared", "shop")
+    }
+    if !ClickActionUntil("bait", "bait_item", () => CraftUp()
             , 4, ShopCfg.afterClick + 0.6)
-        return ShopFail("CRAFT window never opened", "shop")
+        return ShopFail("CRAFT window never opened for " . bait.name
+            . " (is it unlocked? is the bait row right?)", "shop")
 
     plus := PtAbs(Points.craftPlus)
     Loop nPlus {
@@ -1756,40 +2102,54 @@ BuyBaitRoute() {
         }
     }
     if !closed
-        return ShopFail("CRAFT window did not close - purchase unconfirmed", "shop")
+        return ShopFail("CRAFT window did not close - purchase unconfirmed (missing "
+            . (bait.item != "" ? bait.item . " or " : "") . "money?)", "shop")
 
     ; From here the bait IS bought: credit it however messy the exit is.
     BotState.lastBought := bought
+    Tally("purchases")
+    Tally("baitBought", bought)
+    Tally("spent", cost)
     NoteResponse()
+    HookBait(bait, bought, cost)
     if !LeaveDialogue() {
         LogMsg("[shop] bait bought, but the dialogue did not close - stopping safely")
-        BotState.running := false
+        Halt("the NPC dialogue would not close after buying bait")
         return true
     }
     Wait(ShopCfg.afterNevermind)
     SetRod(true)
     EnterFishingStance()
-    LogMsg("[shop] done - " . bought . " bait bought")
+    LogMsg("[shop] done - " . bought . " " . bait.name . " bought")
     return true
 }
 
+; The Angler cannot buy fish; only the Fisherman's Shop has "Sell Fish".
 SellFish(stayAtNpc := false) {
+    if (Cfg.npc == "Angler") {
+        LogMsg("[sell] the Angler cannot buy fish - skipped")
+        return false
+    }
     LogMsg("[sell] selling the fish stock")
+    moneyBefore := Cfg.trackIncome ? ReadMoney() : -1
     if !OpenNpcDialogue()
         return ShopFail("NPC dialogue never opened", "sell")
-    if !ClickActionUntil("root", "shop", () => MenuPanels().Length == 3
+    if !ClickActionUntil("root", "shop", () => MenuPanels().Length == PageRows("shop")
             , 4, ShopCfg.afterClick + 0.6, "shop")
         return ShopFail("Shop page never appeared", "sell")
-    if !ClickActionUntil("shop", "sell_fish", () => MenuPanels().Length == 2
+    if !ClickActionUntil("shop", "sell_fish", () => MenuPanels().Length == PageRows("confirm")
             , 4, ShopCfg.confirmTimeout, "confirm")
         return ShopFail("sell confirmation never appeared", "sell")
     Wait(0.7)
 
     sold := false
+    shot := ""
     Loop 3 {
         if (!Alive() || !WaitMenuPage("confirm", ShopCfg.confirmTimeout))
             break
         ClickMenuAction("confirm", "confirm")
+        if (shot == "")
+            shot := SaleShot()                           ; the sale text, bottom centre
         if WaitUntil(() => MenuPanels().Length < 2, ShopCfg.confirmTimeout) {
             sold := true
             break
@@ -1799,9 +2159,28 @@ SellFish(stayAtNpc := false) {
         return ShopFail("sell confirmation did not close", "sell")
 
     Wait(ShopCfg.afterNevermind)
-    BotStats.sales += 1
+    fishSold := BotState.sinceSell
+    gained := -1
+    if Cfg.trackIncome {
+        after := ReadMoney()
+        if (moneyBefore >= 0 && after >= moneyBefore) {
+            gained := after - moneyBefore
+        } else if (shot != "") {                         ; fall back to the sale text itself
+            v := ParseMoney(OcrFile(shot))
+            if (v > 0)
+                gained := v
+        }
+    }
+    Tally("sales")
+    if (gained >= 0)
+        Tally("income", gained)
+    else if Cfg.trackIncome
+        Tally("unreadable")
     BotState.sinceSell := 0
     NoteResponse()
+    LogMsg("[sell] sold " . fishSold . " fish"
+        . (gained >= 0 ? " for $" . Fmt(gained) : (Cfg.trackIncome ? " (amount unreadable)" : "")))
+    HookSale(gained, fishSold, shot)
     if stayAtNpc {
         BotState.atNpc := false
         LogMsg("[sell] done - reopening the NPC for bait")
@@ -1813,13 +2192,23 @@ SellFish(stayAtNpc := false) {
     return true
 }
 
+; Screenshot of the strip below the screen centre, where the sale text pops up.
+SaleShot() {
+    if !((Cfg.hkOn && Cfg.hkShot) || Cfg.trackIncome)
+        return ""
+    Wait(Timing.shotDelay)
+    r := SubRect(BotState.win, Regions.sale)
+    path := TMP_DIR . "\sale_" . FormatTime(, "yyyyMMdd_HHmmss") . ".png"
+    return PngSave(r.x, r.y, r.w, r.h, path) ? path : ""
+}
+
+
 ; ============================================================================
 ;  FISHING ENGINE
 ; ============================================================================
 DoCast() {
     if !FishingShiftReady() {
-        LogMsg("[cast] Shift Lock not confirmed - stopping before a free-cursor cast")
-        BotState.running := false
+        Halt("Shift Lock not confirmed - stopping before a free-cursor cast")
         return false
     }
     ; Never cast into a live minigame.
@@ -1836,65 +2225,74 @@ DoCast() {
         ZoomReset()
     }
 
-    winH := BotState.win.h
-    seenMin := Max(10, Round(winH * 0.03))       ; any bar at all = the press took
-    plateauMin := Round(winH * 0.08)             ; a plausible "nearly full" height
+    ; Perfect cast = release when the charge bar is FULL. The bar bounces
+    ; (fills, then drains again), so it is measured against the track height every
+    ; tick and released the moment it reaches the threshold on the way up. If the
+    ; first rise is missed, it simply waits for the next one (up to castHold s).
+    thr := Min(100, Max(60, Cfg.perfectPct)) / 100.0
     Loop Timing.maxCastAttempts {
         attempt := A_Index
         MeterReset()
         Mouse.Hold(true)
-        deadline := Now() + Timing.castHold
+        t0 := Now()
+        deadline := t0 + Timing.castHold
         charged := false, perfect := false, byPlateau := false
-        peak := 0, prevPeak := 0, prevPeakT := 0.0, lastGrow := 0.0, rate := 0.0
-        full := BotState.meterFull               ; learned full height (0 = not yet)
+        level := 0.0, peak := 0.0
+        prev := 0.0, prevT := 0.0, rate := 0.0
+        topSince := 0.0, topRef := 0.0
+        lost := 0
 
         while (Alive() && Now() < deadline) {
-            hgt := MeterRead()
+            lv := MeterRead()
             tn := Now()
-            if (hgt >= seenMin) {
+            if (lv >= 0) {
+                lost := 0
                 charged := true
-                if !Cfg.perfect {
-                    Wait(Min(0.15, Timing.castHold))     ; classic: hold a beat, release
+                level := lv
+                if !Cfg.perfect {                        ; classic: hold a beat, release
+                    Wait(Min(0.15, Timing.castHold))
                     break
                 }
-                if (hgt > peak) {
-                    if (prevPeakT > 0.0 && tn > prevPeakT)
-                        rate := (hgt - prevPeak) / (tn - prevPeakT)   ; px/s, per new frame
-                    prevPeak := hgt
-                    prevPeakT := tn
-                    peak := hgt
-                    lastGrow := tn
+                if (prevT > 0.0 && tn > prevT)
+                    rate := rate * 0.6 + ((lv - prev) / (tn - prevT)) * 0.4    ; fill per second
+                prev := lv
+                prevT := tn
+                if (lv > peak)
+                    peak := lv
+                if (lv + Max(0.0, rate) * Timing.releaseLead >= thr) {
+                    perfect := true
+                    break
                 }
-                if (full > 0) {
-                    ; Release so the click lands on the full frame (lead = capture + input latency).
-                    if (peak + Max(0.0, rate) * Timing.releaseLead >= full - 1) {
+                ; A bar that saturates just under the threshold sits still at the top.
+                if (lv >= 0.85) {
+                    if (topSince == 0.0 || lv > topRef + 0.01) {
+                        topSince := tn
+                        topRef := lv
+                    } else if (lv >= topRef - 0.01 && tn - topSince >= 0.12) {
                         perfect := true
+                        byPlateau := true
                         break
                     }
+                } else {
+                    topSince := 0.0
+                    topRef := 0.0
                 }
-                ; Frozen for ~5 frames at a believable height = the bar is full.
-                ; This also corrects a stale `full` if the camera distance changed.
-                if (peak >= plateauMin && tn - lastGrow >= 0.08) {
-                    perfect := true
-                    byPlateau := true
-                    break
-                }
+            } else if (charged && ++lost >= 6) {
+                break                                    ; the bar is gone: the cast already left
             }
             Sleep(1)
         }
         Mouse.Hold(false)
+        elapsed := Now() - t0
         MeterReset()
 
         if charged {
-            if (Cfg.perfect && peak >= plateauMin) {
-                if (byPlateau)                           ; a frozen bar IS the full height
-                    BotState.meterFull := peak
-                LogMsg("[cast] released at " . peak . " px"
-                    . (BotState.meterFull > 0 ? " (" . Round(100 * peak / BotState.meterFull) . "% of full "
-                        . BotState.meterFull . ")" : "")
-                    . (perfect ? "" : " - timed out before full"))
-            }
-            BotStats.casts += 1
+            if Cfg.perfect
+                LogMsg("[cast] released at " . Round(level * 100) . "% (peak " . Round(peak * 100)
+                    . "%) after " . Round(elapsed, 2) . " s"
+                    . (perfect ? (byPlateau ? " - bar saturated" : " - top reached")
+                               : " - never reached " . Round(thr * 100) . "%, released anyway"))
+            Tally("casts")
             LogMsg("[cast] #" . BotStats.casts . (attempt == 1 ? "" : " (attempt " . attempt . ")"))
             Wait(Timing.castSettle)
             return true
@@ -1907,7 +2305,7 @@ DoCast() {
         LogMsg("[cast] no charge - retrying (" . attempt . "/" . Timing.maxCastAttempts . ")")
         Wait(Timing.castRetryGap)
     }
-    BotStats.casts += 1
+    Tally("casts")
     LogMsg("[cast] #" . BotStats.casts . " unverified - continuing")
     Wait(Timing.castSettle)
     return false
@@ -1927,10 +2325,6 @@ WaitForBite() {
                 BotStats.bites += 1
                 NoteResponse()
                 LogMsg("[bite] hooked")
-                if (BotState.bait > 0)                   ; bait is spent at the bite
-                    BotState.bait -= 1
-                if (BotState.bait >= 0)
-                    LogMsg("[bait] " . BotState.bait . " left")
                 return true
             }
         } else {
@@ -1944,7 +2338,7 @@ WaitForBite() {
 }
 
 ; Drive the minigame. Returns true if it ran through to the end.
-Reel() {
+Reel(spend := true) {
     geo := 0
     deadline := Now() + Timing.biteToBar
     while (Alive() && Now() < deadline) {
@@ -1957,6 +2351,10 @@ Reel() {
         BotStats.missedBar += 1
         LogMsg("[reel] bar never appeared")
         return false
+    }
+    if (spend && BotState.bait > 0) {                    ; bait is only used up once the minigame really starts
+        BotState.bait -= 1
+        LogMsg("[bait] " . BotState.bait . " left")
     }
     geo := AcquireWidest(geo)
     tw := geo.tw
@@ -2103,7 +2501,7 @@ Reel() {
         . "% | outside " . Round(outPct) . "%"
         . (progress >= 0 ? " | progress " . Round(progress * 100) . "%" : ""))
     if escaped {
-        BotStats.escapes += 1
+        Tally("escapes")
         LogMsg("[reel] the fish got away")
     }
     NoteResponse()
@@ -2125,7 +2523,7 @@ DismissCatch() {
     if BotState.lastEscaped {
         LogMsg("[catch] none - that one escaped; recasting")
     } else {
-        BotStats.catches += 1
+        Tally("catches")
         BotState.sinceSell += 1
         NoteResponse()
         LogMsg("[catch] #" . BotStats.catches . " - recasting")
@@ -2149,7 +2547,7 @@ NeedsBait() {
 }
 
 NeedsSell() {
-    return Cfg.sellOn && Cfg.sellEvery > 0 && BotState.sinceSell >= Cfg.sellEvery
+    return Cfg.sellOn && Cfg.npc != "Angler" && Cfg.sellEvery > 0 && BotState.sinceSell >= Cfg.sellEvery
 }
 
 Cycle() {
@@ -2162,10 +2560,18 @@ Cycle() {
     }
     ; Recover mid-cycle: a bar is already up (started mid-fight).
     if FindBar() {
-        if Reel()
+        if Reel(false)
             DismissCatch()
         WaitBarClear()
         return
+    }
+
+    if (Cfg.trackLevel && Now() - BotState.levelRead > 300)
+        UpdateLevel()
+    if BotState.reportDue {                              ; hourly report: fresh level first
+        BotState.reportDue := false
+        UpdateLevel()
+        SendHourly()
     }
 
     sellDue := NeedsSell()
@@ -2187,8 +2593,7 @@ Cycle() {
     }
 
     if (BotState.bait == 0) {                          ; tracked count hit zero and nothing bought it back
-        LogMsg("[bait] out of bait - stopping" . (Cfg.buyBait ? "" : " (enable 'Buy bait' to restock automatically)"))
-        BotState.running := false
+        Halt("out of bait" . (Cfg.buyBait ? "" : " (enable auto-buy to restock automatically)"))
         return
     }
     if !DoCast()
@@ -2244,9 +2649,14 @@ RunBot() {
     BotState.zoomedAt := -1
     BotState.biteMisses := 0
     BotState.buyFailures := 0
+    BotState.stopReason := ""
+    BotState.levelStart := -1
+    BotState.levelLast := -1
+    BotState.levelRead := Now()
+    BotState.reportDue := false
     MeterReset()
 
-    LogMsg("[start] settings: buyBait=" . (Cfg.buyBait ? "on" : "OFF") . " baitNow=" . Cfg.baitNow
+    LogMsg("[start] npc=" . Cfg.npc . " bait=" . CurBait().name . " buyBait=" . (Cfg.buyBait ? "on" : "OFF") . " baitNow=" . Cfg.baitNow
         . " baitPerPurchase=" . Cfg.baitPer . " sell=" . (Cfg.sellOn ? "on" : "OFF")
         . " sellEvery=" . Cfg.sellEvery . " zoomLock=" . (Cfg.zoomLock ? "on" : "off")
         . " perfect=" . (Cfg.perfect ? "on" : "off"))
@@ -2258,9 +2668,12 @@ RunBot() {
     else
         startOk := EnterFishingStance()
     if !startOk {
+        BotState.stopReason := "start-up failed (NPC anchor / Shift Lock) - see the log"
         FinishRun()
         return
     }
+    UpdateLevel()
+    HookStartMsg()
 
     while Alive() {
         try {
@@ -2283,7 +2696,14 @@ ResetStats() {
     BotStats.biteTimeouts := 0
     BotStats.sales := 0
     BotStats.purchases := 0
+    BotStats.baitBought := 0
+    BotStats.spent := 0
+    BotStats.income := 0
+    BotStats.unreadable := 0
+    BotStats.levels := 0
+    BotStats.lastUp := 0.0
     BotStats.started := Now()
+    ResetHour()
 }
 
 FinishRun() {
@@ -2294,7 +2714,9 @@ FinishRun() {
     LogMsg("[stop] casts " . BotStats.casts . " | bites " . BotStats.bites
         . " | catches " . BotStats.catches . " | escapes " . BotStats.escapes
         . " | sales " . BotStats.sales . " | " . Round(BotStats.catches / mins, 1) . " fish/min")
+    BotStats.lastUp := Now() - BotStats.started
     SetStatus("Idle")
+    HookStopMsg()
 }
 
 ToggleRun(*) {
@@ -2313,45 +2735,90 @@ ToggleDebug(*) {
 }
 
 ; ============================================================================
-;  SETTINGS + GUI
+;  SETTINGS  (BloxFishing.ini)
 ; ============================================================================
+; [section, key, default, type]   type: s = text, i = integer, b = on/off
+SETTINGS_SPEC := [
+    ["display", "resolution", "Auto", "s"]
+  , ["display", "theme", "Midnight", "s"]
+  , ["fishing", "rodSlot", "4", "s"]
+  , ["fishing", "fastBite", "0", "b"]
+  , ["fishing", "slowFlick", "0", "b"]
+  , ["fishing", "chest", "1", "b"]
+  , ["fishing", "anchor", "1", "b"]
+  , ["fishing", "perfect", "1", "b"]
+  , ["fishing", "perfectPct", "97", "i"]
+  , ["camera", "zoomLock", "1", "b"]
+  , ["camera", "zoomOut", "8", "i"]
+  , ["camera", "zoomEvery", "5", "i"]
+  , ["shop", "npc", "Fisherman", "s"]
+  , ["shop", "buyBait", "1", "b"]
+  , ["shop", "baitType", "Basic Bait", "s"]
+  , ["shop", "baitNow", "0", "i"]
+  , ["shop", "baitPer", "40", "i"]
+  , ["shop", "baitRow", "0", "i"]
+  , ["shop", "sellOn", "1", "b"]
+  , ["shop", "sellEvery", "100", "i"]
+  , ["shop", "trackIncome", "1", "b"]
+  , ["shop", "trackLevel", "1", "b"]
+  , ["webhook", "hkOn", "0", "b"]
+  , ["webhook", "hkUrl", "", "s"]
+  , ["webhook", "hkName", "Blox Fishing Macro", "s"]
+  , ["webhook", "hkMention", "", "s"]
+  , ["webhook", "hkStart", "1", "b"]
+  , ["webhook", "hkStop", "1", "b"]
+  , ["webhook", "hkSale", "1", "b"]
+  , ["webhook", "hkShot", "1", "b"]
+  , ["webhook", "hkBait", "1", "b"]
+  , ["webhook", "hkHourly", "1", "b"]
+  , ["webhook", "hkEveryMin", "60", "i"]
+  , ["webhook", "hkErr", "1", "b"]
+]
+
 LoadSettings() {
-    Cfg.resolution := IniRead(INI_FILE, "display", "resolution", "Auto")
-    Cfg.rodSlot    := IniRead(INI_FILE, "fishing", "rodSlot", "4")
-    Cfg.fastBite   := IniRead(INI_FILE, "fishing", "fastBite", "0") == "1"
-    Cfg.slowFlick  := IniRead(INI_FILE, "fishing", "slowFlick", "0") == "1"
-    Cfg.chest      := IniRead(INI_FILE, "fishing", "chest", "1") == "1"
-    Cfg.anchor     := IniRead(INI_FILE, "fishing", "anchor", "1") == "1"
-    Cfg.perfect    := IniRead(INI_FILE, "fishing", "perfect", "1") == "1"
-    Cfg.zoomLock   := IniRead(INI_FILE, "camera", "zoomLock", "1") == "1"
-    Cfg.zoomOut    := Integer(IniRead(INI_FILE, "camera", "zoomOut", "5"))
-    Cfg.zoomEvery  := Integer(IniRead(INI_FILE, "camera", "zoomEvery", "5"))
-    ; Early-release lead in ms. 0 = release on the frame that shows a full bar
-    ; (the bar saturates, so holding a few ms longer is harmless).
-    Timing.releaseLead := Float(IniRead(INI_FILE, "fishing", "castLeadMs", "0")) / 1000
-    Cfg.buyBait    := IniRead(INI_FILE, "shop", "buyBait", "1") == "1"
-    Cfg.baitNow    := Integer(IniRead(INI_FILE, "shop", "baitNow", "0"))
-    Cfg.baitPer    := Integer(IniRead(INI_FILE, "shop", "baitPer", "40"))
-    Cfg.sellOn     := IniRead(INI_FILE, "shop", "sellOn", "1") == "1"
-    Cfg.sellEvery  := Integer(IniRead(INI_FILE, "shop", "sellEvery", "100"))
+    for s in SETTINGS_SPEC {
+        name := s[2]
+        raw := IniRead(INI_FILE, s[1], name, s[3])
+        if (s[4] == "b") {
+            Cfg.%name% := (raw == "1")
+        } else if (s[4] == "i") {
+            try {
+                Cfg.%name% := Integer(raw)
+            } catch {
+                Cfg.%name% := Integer(s[3])
+            }
+        } else {
+            Cfg.%name% := raw
+        }
+    }
+    ver := 1
+    try ver := Integer(IniRead(INI_FILE, "meta", "ver", "1"))
+    if (ver < 2)
+        Cfg.zoomOut := 8                                 ; new default camera distance
+    Cfg.perfectPct := Min(100, Max(60, Cfg.perfectPct))
+    Cfg.hkEveryMin := Max(1, Cfg.hkEveryMin)
+    Cfg.baitPer := Min(100, Max(10, (Cfg.baitPer // 10) * 10))
+    if !THEMES.Has(Cfg.theme)
+        Cfg.theme := "Midnight"
+    if (Cfg.npc != "Angler")
+        Cfg.npc := "Fisherman"
+    if (Cfg.npc == "Angler")
+        Cfg.sellOn := false
+    ; Early-release lead in ms (0 = release on the frame that shows a full bar).
+    try Timing.releaseLead := Float(IniRead(INI_FILE, "fishing", "castLeadMs", "0")) / 1000
+    try Timing.shotDelay := Float(IniRead(INI_FILE, "webhook", "shotDelayMs", "500")) / 1000
 }
 
-SyncSettings() {
-    Cfg.resolution := Ui.res.Text
-    Cfg.rodSlot    := Ui.rod.Text
-    Cfg.fastBite   := Ui.fast.Value == 1
-    Cfg.slowFlick  := Ui.slow.Value == 1
-    Cfg.chest      := Ui.chest.Value == 1
-    Cfg.anchor     := Ui.anchor.Value == 1
-    Cfg.perfect    := Ui.perfect.Value == 1
-    Cfg.zoomLock   := Ui.zoomLock.Value == 1
-    Cfg.zoomOut    := Min(30, IntOf(Ui.zoomOut, 5))
-    Cfg.buyBait    := Ui.buy.Value == 1
-    Cfg.baitNow    := IntOf(Ui.baitNow, 0)
-    Cfg.baitPer    := Max(10, (IntOf(Ui.baitPer, 40) // 10) * 10)
-    Cfg.sellOn     := Ui.sell.Value == 1
-    Cfg.sellEvery  := IntOf(Ui.sellEvery, 100)
-    SaveSettings()
+SaveSettings() {
+    for s in SETTINGS_SPEC {
+        name := s[2]
+        v := Cfg.%name%
+        if (s[4] == "b")
+            v := v ? 1 : 0
+        try IniWrite(v, INI_FILE, s[1], name)
+    }
+    try IniWrite(2, INI_FILE, "meta", "ver")
+    try IniWrite(Round(Timing.releaseLead * 1000), INI_FILE, "fishing", "castLeadMs")
 }
 
 IntOf(ctrl, fallback) {
@@ -2359,37 +2826,509 @@ IntOf(ctrl, fallback) {
     return fallback
 }
 
-SaveSettings() {
-    IniWrite(Cfg.resolution, INI_FILE, "display", "resolution")
-    IniWrite(Cfg.rodSlot, INI_FILE, "fishing", "rodSlot")
-    IniWrite(Cfg.fastBite ? 1 : 0, INI_FILE, "fishing", "fastBite")
-    IniWrite(Cfg.slowFlick ? 1 : 0, INI_FILE, "fishing", "slowFlick")
-    IniWrite(Cfg.chest ? 1 : 0, INI_FILE, "fishing", "chest")
-    IniWrite(Cfg.anchor ? 1 : 0, INI_FILE, "fishing", "anchor")
-    IniWrite(Cfg.perfect ? 1 : 0, INI_FILE, "fishing", "perfect")
-    IniWrite(Cfg.zoomLock ? 1 : 0, INI_FILE, "camera", "zoomLock")
-    IniWrite(Cfg.zoomOut, INI_FILE, "camera", "zoomOut")
-    IniWrite(Cfg.zoomEvery, INI_FILE, "camera", "zoomEvery")
-    IniWrite(Cfg.buyBait ? 1 : 0, INI_FILE, "shop", "buyBait")
-    IniWrite(Cfg.baitNow, INI_FILE, "shop", "baitNow")
-    IniWrite(Cfg.baitPer, INI_FILE, "shop", "baitPer")
-    IniWrite(Cfg.sellOn ? 1 : 0, INI_FILE, "shop", "sellOn")
-    IniWrite(Cfg.sellEvery, INI_FILE, "shop", "sellEvery")
+; GUI -> Cfg (and to disk). Called when the run starts and whenever a field changes.
+SyncSettings(save := true) {
+    try {
+        Cfg.resolution := Ui.res.Text
+        Cfg.rodSlot := Ui.rod.Text
+        Cfg.npc := (Ui.npc.Text == "Angler") ? "Angler" : "Fisherman"
+        idx := Ui.bait.Value
+        if (idx >= 1 && idx <= BAITS.Length)
+            Cfg.baitType := BAITS[idx].name
+        for key, v in Ui.tog
+            Cfg.%key% := v
+        Cfg.perfectPct := Min(100, Max(60, IntOf(Ui.perfectPct, 97)))
+        Cfg.zoomOut := Min(30, Max(0, IntOf(Ui.zoomOut, 8)))
+        Cfg.zoomEvery := Max(0, IntOf(Ui.zoomEvery, 5))
+        Cfg.baitNow := Min(100, Max(0, IntOf(Ui.baitNow, 0)))
+        Cfg.baitPer := Min(100, Max(10, Integer(Ui.baitPer.Text)))
+        Cfg.sellEvery := Max(0, IntOf(Ui.sellEvery, 100))
+        Cfg.hkEveryMin := Max(1, IntOf(Ui.hkEveryMin, 60))
+        Cfg.hkUrl := Trim(Ui.hkUrl.Value)
+        nm := Trim(Ui.hkName.Value)
+        Cfg.hkName := (nm != "") ? nm : "Blox Fishing Macro"
+        Cfg.hkMention := RegExReplace(Ui.hkMention.Value, "\D")
+    }
+    if (Cfg.npc == "Angler")
+        Cfg.sellOn := false
+    if save
+        SaveSettings()
 }
 
+; Any field of the GUI changed.
+OnUiChange(*) {
+    SyncSettings(false)
+    try {
+        if (Cfg.npc == "Angler" && Ui.tog["sellOn"])
+            SetToggle("sellOn", false)
+    }
+    RefreshDynamic()
+    SetTimer(SaveSettings, -700)
+}
+
+; Texts that depend on other settings (price, NPC notes).
+RefreshDynamic() {
+    try {
+        b := CurBait()
+        packs := Max(1, Cfg.baitPer // 10)
+        t := "= " . packs . (packs == 1 ? " pack" : " packs") . " of 10   -   $" . Fmt(packs * b.price)
+        if (b.item != "")
+            t .= "  +  " . packs . " x " . b.item
+        Ui.costLbl.Text := t
+    }
+    try {
+        if (Cfg.npc == "Angler") {
+            Ui.npcNote.Text := "The Angler sells bait only (Bait menu). It cannot buy fish, so auto-sell is switched off."
+            Ui.sellNote.Text := "Auto-sell is not available with the Angler."
+        } else {
+            Ui.npcNote.Text := "The Fisherman sells bait (Shop > Buy Bait) and buys your fish (Shop > Sell Fish)."
+            Ui.sellNote.Text := ""
+        }
+    }
+}
+
+; ============================================================================
+;  FORMATTING / SCREENSHOT / OCR
+; ============================================================================
+TMP_DIR := A_Temp . "\BloxFishing"
+HOOK_SHOT_NAME := "sale.png"
+
+CleanTmp() {
+    try DirCreate(TMP_DIR)
+    cutoff := DateAdd(A_Now, -1, "Days")
+    Loop Files, TMP_DIR . "\*.*" {
+        if (A_LoopFileTimeModified < cutoff && A_LoopFileName != "ocr.ps1")
+            try FileDelete(A_LoopFileFullPath)
+    }
+}
+
+; Save a screen rectangle as a PNG (GDI+). Returns true on success.
+PngSave(x, y, w, h, path) {
+    static token := 0
+    if !token {
+        si := Buffer(24, 0)
+        NumPut("UInt", 1, si, 0)
+        tk := 0
+        if (DllCall("gdiplus\GdiplusStartup", "ptr*", &tk, "ptr", si, "ptr", 0) != 0)
+            return false
+        token := tk
+    }
+    hdcS := DllCall("GetDC", "ptr", 0, "ptr")
+    hdc := DllCall("CreateCompatibleDC", "ptr", hdcS, "ptr")
+    hbm := DllCall("CreateCompatibleBitmap", "ptr", hdcS, "int", w, "int", h, "ptr")
+    old := DllCall("SelectObject", "ptr", hdc, "ptr", hbm, "ptr")
+    DllCall("BitBlt", "ptr", hdc, "int", 0, "int", 0, "int", w, "int", h
+        , "ptr", hdcS, "int", x, "int", y, "uint", 0x00CC0020)
+    DllCall("SelectObject", "ptr", hdc, "ptr", old)
+    pBmp := 0
+    DllCall("gdiplus\GdipCreateBitmapFromHBITMAP", "ptr", hbm, "ptr", 0, "ptr*", &pBmp)
+    ok := false
+    if pBmp {
+        clsid := Buffer(16, 0)
+        DllCall("ole32\CLSIDFromString", "wstr", "{557CF406-1A04-11D3-9A73-0000F81EF32E}", "ptr", clsid)
+        ok := (DllCall("gdiplus\GdipSaveImageToFile", "ptr", pBmp, "wstr", path, "ptr", clsid, "ptr", 0) == 0)
+        DllCall("gdiplus\GdipDisposeImage", "ptr", pBmp)
+    }
+    DllCall("DeleteObject", "ptr", hbm)
+    DllCall("DeleteDC", "ptr", hdc)
+    DllCall("ReleaseDC", "ptr", 0, "ptr", hdcS)
+    return ok && FileExist(path)
+}
+
+; Windows 10/11 built-in OCR, driven through PowerShell (no extra install).
+OcrScriptWrite(path) {
+    script := "
+    (
+    param([string]$ImgPath, [string]$OutPath)
+    $ErrorActionPreference = 'Stop'
+    try {
+      Add-Type -AssemblyName System.Runtime.WindowsRuntime
+      $null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
+      $null = [Windows.Storage.Streams.IRandomAccessStream, Windows.Storage.Streams, ContentType = WindowsRuntime]
+      $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
+      $null = [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
+      $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
+      $null = [Windows.Media.Ocr.OcrResult, Windows.Foundation, ContentType = WindowsRuntime]
+      $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -like 'IAsyncOperation*' })[0]
+      function Await($op, $type) { $t = $asTask.MakeGenericMethod($type).Invoke($null, @($op)); $null = $t.Wait(-1); $t.Result }
+      $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($ImgPath)) ([Windows.Storage.StorageFile])
+      $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+      $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+      $bmp = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+      $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+      if ($engine -eq $null) { Set-Content -Path $OutPath -Value 'ERR:no-ocr-engine'; exit }
+      $res = Await ($engine.RecognizeAsync($bmp)) ([Windows.Media.Ocr.OcrResult])
+      Set-Content -Path $OutPath -Value $res.Text
+    } catch { Set-Content -Path $OutPath -Value ('ERR:' + $_.Exception.Message) }
+    )"
+    try {
+        f := FileOpen(path, "w", "UTF-8-RAW")
+        f.Write(script)
+        f.Close()
+        return true
+    }
+    return false
+}
+
+OcrFile(png) {
+    ps := TMP_DIR . "\ocr.ps1"
+    out := TMP_DIR . "\ocr_out.txt"
+    try FileDelete(out)
+    if !FileExist(ps)
+        OcrScriptWrite(ps)
+    try {
+        RunWait('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' . ps
+            . '" "' . png . '" "' . out . '"', , "Hide")
+    } catch {
+        return ""
+    }
+    try return Trim(FileRead(out))
+    return ""
+}
+
+; Largest number in a piece of OCR text ("$ 483,112" -> 483112), or -1.
+ParseMoney(text) {
+    best := -1
+    pos := 1
+    while RegExMatch(text, "(\d[\d,. ]*)", &m, pos) {
+        digits := RegExReplace(m[1], "\D")
+        if (digits != "" && StrLen(digits) <= 12) {
+            v := Integer(digits)
+            if (v > best)
+                best := v
+        }
+        pos := m.Pos + Max(1, m.Len)
+    }
+    return best
+}
+
+; "Lv. 868" -> 868, or -1.
+ParseLevel(text) {
+    if RegExMatch(text, "i)L[vV]\.?\s*(\d{1,4})", &m)
+        return Integer(m[1])
+    v := ParseMoney(text)
+    return (v >= 1 && v <= 9999) ? v : -1
+}
+
+ReadLevel() {
+    r := SubRect(BotState.win, Regions.level)
+    path := TMP_DIR . "\level.png"
+    if !PngSave(r.x, r.y, r.w, r.h, path)
+        return -1
+    lv := ParseLevel(OcrFile(path))
+    return (lv >= 1 && lv <= 3000) ? lv : -1
+}
+
+; Read the level from the HUD and count the levels gained. Only valid while the
+; HUD is visible (not in a dialogue). Jumps of more than 25 are treated as OCR noise.
+UpdateLevel() {
+    if !Cfg.trackLevel
+        return
+    lv := ReadLevel()
+    BotState.levelRead := Now()
+    if (lv < 0)
+        return
+    if (BotState.levelStart < 0) {
+        BotState.levelStart := lv
+        BotState.levelLast := lv
+        LogMsg("[level] starting level " . lv)
+        return
+    }
+    if (lv >= BotState.levelLast && lv - BotState.levelLast <= 25) {
+        if (lv > BotState.levelLast) {
+            Tally("levels", lv - BotState.levelLast)
+            LogMsg("[level] now " . lv . " (+" . BotStats.levels . " this session)")
+        }
+        BotState.levelLast := lv
+    }
+}
+
+LevelText() {
+    if (BotState.levelStart < 0)
+        return "n/a"
+    return BotState.levelStart . " > " . BotState.levelLast . "  (+" . BotStats.levels . ")"
+}
+
+; Read the $ counter (bottom-left of the HUD). -1 if unreadable.
+ReadMoney() {
+    r := SubRect(BotState.win, Regions.money)
+    path := TMP_DIR . "\money.png"
+    if !PngSave(r.x, r.y, r.w, r.h, path)
+        return -1
+    v := ParseMoney(OcrFile(path))
+    return (v >= 0 && v < 100000000000) ? v : -1
+}
+
+; ============================================================================
+;  DISCORD WEBHOOK
+; ============================================================================
+JsonEsc(s) {
+    s := String(s)
+    s := StrReplace(s, "\", "\\")
+    s := StrReplace(s, '"', '\"')
+    s := StrReplace(s, "`r", "")
+    s := StrReplace(s, "`n", "\n")
+    s := StrReplace(s, "`t", "\t")
+    return s
+}
+
+HookUrlOk() {
+    return RegExMatch(Cfg.hkUrl, "i)^https://(?:(?:canary|ptb)\.)?discord(?:app)?\.com/api/(?:v\d+/)?webhooks/\d+/[\w-]+$") ? true : false
+}
+
+HookReady() {
+    return Cfg.hkOn && HookUrlOk()
+}
+
+; fields: array of [name, value, inline?]
+EmbedJson(title, desc, color, fields := "", imageName := "") {
+    j := '{"title":"' . JsonEsc(title) . '","description":"' . JsonEsc(desc) . '","color":' . color
+    if (IsObject(fields) && fields.Length) {
+        j .= ',"fields":['
+        for i, f in fields {
+            if (i > 1)
+                j .= ","
+            val := String(f[2])
+            if (val == "")
+                val := "-"
+            inline := (f.Length >= 3 && !f[3]) ? "false" : "true"
+            j .= '{"name":"' . JsonEsc(f[1]) . '","value":"' . JsonEsc(val) . '","inline":' . inline . '}'
+        }
+        j .= "]"
+    }
+    if (imageName != "")
+        j .= ',"image":{"url":"attachment://' . imageName . '"}'
+    j .= ',"footer":{"text":"' . JsonEsc(APP_NAME . "  v" . APP_VERSION) . '"}'
+    j .= ',"timestamp":"' . FormatTime(A_NowUTC, "yyyy-MM-ddTHH:mm:ssZ") . '"}'
+    return j
+}
+
+; Fire-and-forget POST through curl.exe (ships with Windows 10 1803+). The
+; optional PNG is attached as multipart. The HTTP status is logged ~5 s later.
+HookPost(embeds, filePath := "", content := "", label := "message", fname := "sale.png") {
+    if !HookUrlOk()
+        return false
+    curl := A_WinDir . "\System32\curl.exe"
+    if !FileExist(curl) {
+        LogMsg("[webhook] curl.exe not found (needs Windows 10 1803 or newer) - cannot send")
+        return false
+    }
+    payload := '{"username":"' . JsonEsc(Cfg.hkName) . '","embeds":[' . embeds . ']'
+    if (content != "")
+        payload .= ',"content":"' . JsonEsc(content) . '"'
+    payload .= '}'
+    id := A_TickCount . "_" . Random(1000, 9999)
+    pf := TMP_DIR . "\hook_" . id . ".json"
+    res := TMP_DIR . "\hook_" . id . ".res"
+    try {
+        f := FileOpen(pf, "w", "UTF-8-RAW")
+        f.Write(payload)
+        f.Close()
+    } catch {
+        return false
+    }
+    cmd := '"' . curl . '" -s -S -m 40 -D "' . res . '" -o NUL -X POST -F "payload_json=<' . pf
+        . ';type=application/json"'
+    if (filePath != "" && FileExist(filePath))
+        cmd .= ' -F "files[0]=@' . filePath . ';filename=' . fname . '"'
+    cmd .= ' "' . Cfg.hkUrl . '"'
+    try {
+        Run(cmd, , "Hide")
+    } catch {
+        return false
+    }
+    SetTimer(HookResult.Bind(res, pf, label), -5000)
+    return true
+}
+
+HookResult(res, pf, label) {
+    code := ""
+    try {
+        txt := FileRead(res)
+        if RegExMatch(txt, "HTTP/[\d.]+\s+(\d{3})", &m)
+            code := m[1]
+    }
+    ok := (code == "200" || code == "204")
+    if ok {
+        SetHookStatus("Last send: " . label . " delivered (HTTP " . code . ") at " . FormatTime(, "HH:mm:ss"))
+    } else {
+        msg := (code != "") ? "HTTP " . code . " - check the webhook URL" : "no answer - check the URL and your connection"
+        LogMsg("[webhook] " . label . " FAILED (" . msg . ")")
+        SetHookStatus("Last send FAILED: " . msg, true)
+    }
+    try FileDelete(res)
+    try FileDelete(pf)
+}
+
+SetHookStatus(text, bad := false) {
+    try {
+        Ui.hookStatus.Text := text
+        Ui.hookStatus.SetFont("c" . (bad ? Ui.th.bad : Ui.th.muted))
+    }
+}
+
+HookStartMsg() {
+    if !(HookReady() && Cfg.hkStart)
+        return
+    bait := CurBait()
+    f := [["NPC", Cfg.npc], ["Bait", bait.name . " x" . Cfg.baitPer]
+        , ["Auto-buy bait", Cfg.buyBait ? "on" : "off"]
+        , ["Auto-sell", (Cfg.sellOn && Cfg.npc != "Angler") ? "every " . Cfg.sellEvery . " catches" : "off"]
+        , ["Perfect cast", Cfg.perfect ? "release at " . Cfg.perfectPct . "%" : "off"]
+        , ["Zoom-out", Cfg.zoomLock ? Cfg.zoomOut . " notches" : "unlocked"]
+        , ["Level", BotState.levelLast >= 0 ? BotState.levelLast : "n/a"]]
+    HookPost(EmbedJson("Macro started", "Fishing has begun.", 0x4ADE80, f), , , "start message")
+}
+
+HookStopMsg() {
+    reason := BotState.stopReason
+    if (reason != "") {
+        if !(HookReady() && Cfg.hkErr)
+            return
+    } else if !(HookReady() && Cfg.hkStop) {
+        return
+    }
+    up := BotStats.lastUp
+    net := BotStats.income - BotStats.spent
+    f := [["Run time", FmtDur(up)], ["Fish caught", Fmt(BotStats.catches)]
+        , ["Money generated", "$" . Fmt(BotStats.income)]
+        , ["Bait bought", Fmt(BotStats.baitBought) . "  ($" . Fmt(BotStats.spent) . ")"]
+        , ["Net profit", (net < 0 ? "-$" : "$") . Fmt(Abs(net))]
+        , ["Casts / escapes", BotStats.casts . " / " . BotStats.escapes]
+        , ["Levels", LevelText()]]
+    if (reason != "") {
+        mention := (Cfg.hkMention != "") ? "<@" . Cfg.hkMention . ">" : ""
+        HookPost(EmbedJson("Macro stopped - needs attention", reason, 0xF87171, f), , mention, "stop message")
+    } else {
+        HookPost(EmbedJson("Macro stopped", "Stopped manually. Session summary:", 0xFBBF24, f), , , "stop message")
+    }
+}
+
+HookSale(gained, fishCount, shot) {
+    if !(HookReady() && Cfg.hkSale)
+        return
+    f := [["Fish sold", Fmt(fishCount)]
+        , ["Money gained", gained >= 0 ? "$" . Fmt(gained) : "unreadable"]
+        , ["Session income", "$" . Fmt(BotStats.income)]]
+    useShot := (Cfg.hkShot && shot != "" && FileExist(shot))
+    HookPost(EmbedJson("Fish sold", "The fish stock was sold at the " . Cfg.npc . ".", 0x34D399, f
+        , useShot ? HOOK_SHOT_NAME : ""), useShot ? shot : "", , "sale message")
+}
+
+HookBait(bait, qty, cost) {
+    if !(HookReady() && Cfg.hkBait)
+        return
+    f := [["Bait", bait.name], ["Quantity", Fmt(qty)], ["Money used", "$" . Fmt(cost)]]
+    if (bait.item != "")
+        f.Push(["Material", (qty // 10) . " x " . bait.item])
+    f.Push(["Total spent this session", "$" . Fmt(BotStats.spent)])
+    HookPost(EmbedJson("Bait purchased", "The macro restocked its bait.", 0x60A5FA, f), , , "bait message")
+}
+
+; Every N minutes while running (default 60).
+HourlyTick() {
+    if !(BotState.running && HookReady() && Cfg.hkHourly)
+        return
+    if (Now() - Hour.started >= Cfg.hkEveryMin * 60)
+        BotState.reportDue := true
+}
+
+SendHourly(*) {
+    SyncSettings(false)
+    if !HookUrlOk() {
+        SetHookStatus("Enter a valid Discord webhook URL first.", true)
+        return
+    }
+    h := Hour
+    mins := Max(0.05, (Now() - h.started) / 60)
+    net := h.income - h.spent
+    f := [["Money generated", "$" . Fmt(h.income) . (h.unreadable ? "  (" . h.unreadable . " sale(s) unreadable)" : "")]
+        , ["Bait bought", Fmt(h.baitBought) . "  ($" . Fmt(h.spent) . " spent)"]
+        , ["Fish caught", Fmt(h.catches)]
+        , ["Net profit", (net < 0 ? "-$" : "$") . Fmt(Abs(net))]
+        , ["Casts / escapes", h.casts . " / " . h.escapes]
+        , ["Levels gained", "+" . h.levels . "   (" . LevelText() . " this session)"]
+        , ["Fish per hour", Round(h.catches * 60 / mins, 1)]
+        , ["Session total", "$" . Fmt(BotStats.income) . " earned  |  " . Fmt(BotStats.catches)
+            . " fish  |  " . FmtDur(Now() - BotStats.started) . " running", false]]
+    shot := ""
+    if (Cfg.hkShot && BotState.running) {                ; the $ + level block, bottom-left
+        r := SubRect(BotState.win, Regions.hud)
+        sp := TMP_DIR . "\hud_" . FormatTime(, "yyyyMMdd_HHmmss") . ".png"
+        if PngSave(r.x, r.y, r.w, r.h, sp)
+            shot := sp
+    }
+    HookPost(EmbedJson("Hourly Report", "Last " . Round(mins) . " min  |  " . Cfg.npc . "  |  "
+        . CurBait().name, 0x6C8CFF, f, (shot != "") ? "hud.png" : ""), shot, , "hourly report", "hud.png")
+    LogMsg("[webhook] hourly report sent")
+    ResetHour()
+}
+
+HookTest(*) {
+    SyncSettings(false)
+    if !HookUrlOk() {
+        SetHookStatus("That is not a Discord webhook URL (https://discord.com/api/webhooks/...).", true)
+        return
+    }
+    f := [["Theme", Cfg.theme], ["NPC", Cfg.npc], ["Bait", CurBait().name]]
+    if HookPost(EmbedJson("Webhook connected", "Test message from the Blox Fishing Macro.", 0x4ADE80, f)
+            , , , "test message")
+        SetHookStatus("Test sent - waiting for Discord...")
+}
+
+; ============================================================================
+;  THEMES
+; ============================================================================
+THEME_ORDER := ["Midnight", "Obsidian", "Ocean", "Emerald", "Sunset", "Rose", "Daylight"]
+THEMES := Map(
+    "Midnight", {bg: "0F1220", side: "0A0D18", card: "171B2E", inp: "1F2542", txt: "E6E9F5", muted: "8B93B5"
+               , accent: "6C8CFF", onAccent: "0B1020", good: "4ADE80", bad: "F87171", line: "2A3050", dark: true}
+  , "Obsidian", {bg: "141414", side: "0C0C0C", card: "1D1D1D", inp: "262626", txt: "EDEDED", muted: "9A9A9A"
+               , accent: "B388FF", onAccent: "150A25", good: "4ADE80", bad: "F87171", line: "333333", dark: true}
+  , "Ocean",    {bg: "0B1B26", side: "07131B", card: "102A39", inp: "163547", txt: "E3F4FA", muted: "7FA7B8"
+               , accent: "22D3EE", onAccent: "04202A", good: "4ADE80", bad: "FB7185", line: "1E4258", dark: true}
+  , "Emerald",  {bg: "0D1A14", side: "08120E", card: "12261C", inp: "193327", txt: "E4F6EC", muted: "84AA95"
+               , accent: "34D399", onAccent: "04200F", good: "86EFAC", bad: "F87171", line: "21402F", dark: true}
+  , "Sunset",   {bg: "1A1214", side: "120B0D", card: "251A1D", inp: "2F2024", txt: "F8EAE4", muted: "B49A94"
+               , accent: "FB923C", onAccent: "2A1204", good: "4ADE80", bad: "F87171", line: "42292E", dark: true}
+  , "Rose",     {bg: "1B1020", side: "130A18", card: "261630", inp: "321D3E", txt: "F7E9F8", muted: "B195B8"
+               , accent: "F472B6", onAccent: "2A0A1C", good: "4ADE80", bad: "FB7185", line: "43284F", dark: true}
+  , "Daylight", {bg: "F3F5FA", side: "E3E8F2", card: "FFFFFF", inp: "FFFFFF", txt: "1B2033", muted: "5F6786"
+               , accent: "3B6EF5", onAccent: "FFFFFF", good: "16A34A", bad: "DC2626", line: "CDD3E4", dark: false})
+
+; ============================================================================
+;  STATUS LINE / STATS
+; ============================================================================
 SetStatus(text := "") {
-    try Ui.start.Text := BotState.running ? "Stop  (F2)" : "Start  (F2)"
+    run := BotState.running
+    try {
+        Ui.sbDot.Text := run ? "●  Running" : "●  Idle"
+        Ui.sbDot.SetFont("c" . (run ? Ui.th.good : Ui.th.muted))
+    }
+    try ApplyRunVis()
     UpdateStats()
 }
 
-; One line that shows what the macro believes, so a wrong setting is visible.
+; What the macro believes, so a wrong setting is visible at a glance.
 UpdateStats() {
-    t := "Status: " . (BotState.running ? "Running" : "Idle")
-    t .= "  |  catches " . BotStats.catches
-    t .= "  |  bait " . (BotState.bait >= 0 ? BotState.bait : "not tracked")
-    if (Cfg.sellOn && Cfg.sellEvery > 0)
-        t .= "  |  sale in " . Max(0, Cfg.sellEvery - BotState.sinceSell)
-    try Ui.status.Text := t
+    try {
+        up := BotState.running ? (Now() - BotStats.started) : BotStats.lastUp
+        if BotState.running
+            BotStats.lastUp := up
+        Ui.tCatch.Text := Fmt(BotStats.catches)
+        Ui.tBait.Text := (BotState.bait >= 0) ? Fmt(BotState.bait) : "n/a"
+        Ui.tIncome.Text := "$" . Fmt(BotStats.income)
+        Ui.tUp.Text := FmtDur(up)
+        Ui.tLevel.Text := (BotState.levelLast >= 0) ? String(BotState.levelLast) : "n/a"
+        Ui.tLevelLbl.Text := (BotStats.levels > 0) ? "Level  (+" . BotStats.levels . ")" : "Level"
+        t := "Casts " . BotStats.casts . "   |   Escapes " . BotStats.escapes
+            . "   |   Spent $" . Fmt(BotStats.spent)
+        if (Cfg.sellOn && Cfg.sellEvery > 0 && Cfg.npc != "Angler")
+            t .= "   |   Sale in " . Max(0, Cfg.sellEvery - BotState.sinceSell)
+        if (BotState.running && HookReady() && Cfg.hkHourly)
+            t .= "   |   Report in " . Max(0, Round((Cfg.hkEveryMin * 60 - (Now() - Hour.started)) / 60)) . " min"
+        Ui.info.Text := t
+    }
 }
 
 CheckSetup(*) {
@@ -2400,6 +3339,9 @@ CheckSetup(*) {
     LogMsg("Administrator: " . (A_IsAdmin ? "yes" : "NO - input to Roblox will be dropped"))
     LogMsg("Screen: " . A_ScreenWidth . "x" . A_ScreenHeight . " | profile: " . name
         . " (" . BotState.resW . "x" . BotState.resH . ")")
+    LogMsg("NPC: " . Cfg.npc . " | bait: " . CurBait().name . " x" . Cfg.baitPer
+        . " | webhook: " . (HookReady() ? "ready" : (Cfg.hkOn ? "URL invalid" : "off")))
+    LogMsg("curl.exe: " . (FileExist(A_WinDir . "\System32\curl.exe") ? "found" : "MISSING (webhook disabled)"))
     if WinExist(ROBLOX_WIN) {
         LogMsg("Roblox game area: " . win.w . "x" . win.h . " at " . win.x . "," . win.y)
         if CheckResolution()
@@ -2415,67 +3357,408 @@ FindBarReport() {
     LogMsg(geo ? "Reel bar visible: track " . geo.tw . " px" : "Reel bar: not on screen (normal when idle)")
 }
 
-BuildGui() {
-    g := Gui("+AlwaysOnTop", APP_NAME . "  v" . APP_VERSION)
-    g.SetFont("s9", "Segoe UI")
+; ============================================================================
+;  GUI HELPERS
+; ============================================================================
+Reg(page, ctrl) {
+    if (page != "")
+        Ui.pages[page].Push(ctrl)
+    return ctrl
+}
+
+Box(g, page, x, y, w, h, color) {
+    return Reg(page, g.Add("Text", Format("x{} y{} w{} h{} Background{}", x, y, w, h, color)))
+}
+
+Lbl(g, page, x, y, w, txt, color := "", size := 9, weight := 400, h := 0) {
+    if (h <= 0)
+        h := Round(size * 2.1) + 2                       ; big fonts need a tall box or they get clipped
+    opt := Format("x{} y{} w{} h{}", x, y, w, h)
+    c := g.Add("Text", opt, txt)
+    c.SetFont(Format("s{} w{} c{}", size, weight, (color != "") ? color : Ui.th.txt), "Segoe UI")
+    return Reg(page, c)
+}
+
+Section(g, page, x, y, txt) {
+    return Lbl(g, page, x, y, 400, txt, Ui.th.accent, 9, 700)
+}
+
+Btn(g, page, x, y, w, h, txt, cb, kind := "primary") {
+    th := Ui.th
+    bg := (kind == "primary") ? th.accent : (kind == "danger") ? th.bad : th.inp
+    fg := (kind == "ghost") ? th.txt : th.onAccent
+    c := g.Add("Text", Format("x{} y{} w{} h{} Center +0x200 Background{}", x, y, w, h, bg), txt)
+    c.SetFont("s10 w600 c" . fg, "Segoe UI")
+    c.OnEvent("Click", cb)
+    return Reg(page, c)
+}
+
+AddEdit(g, page, key, x, y, w, val, numeric := false, mask := false) {
+    th := Ui.th
+    Box(g, page, x, y, w, 24, th.line)
+    opt := Format("x{} y{} w{} h20 -E0x200 Background{} c{}", x + 1, y + 2, w - 2, th.inp, th.txt)
+    if numeric
+        opt .= " Number"
+    e := g.Add("Edit", opt, val)
+    e.SetFont("s9", "Segoe UI")
+    SendMessage(0x00D3, 3, 6 | (6 << 16), e)                 ; EM_SETMARGINS left/right
+    if mask
+        SendMessage(0x00CC, 0x25CF, 0, e)                    ; EM_SETPASSWORDCHAR
+    e.OnEvent("Change", OnUiChange)
+    Ui.%key% := e
+    return Reg(page, e)
+}
+
+AddDdl(g, page, key, x, y, w, items, choose) {
+    th := Ui.th
+    d := g.Add("DropDownList", Format("x{} y{} w{} Choose{} Background{} c{}", x, y, w, choose, th.inp, th.txt), items)
+    d.SetFont("s9", "Segoe UI")
+    if th.dark {
+        try DllCall("uxtheme\SetWindowTheme", "ptr", d.Hwnd, "str", "DarkMode_CFD", "str", "")
+    }
+    d.OnEvent("Change", OnUiChange)
+    Ui.%key% := d
+    return Reg(page, d)
+}
+
+; A switch: two stacked labels (ON / OFF), only one visible at a time.
+AddToggle(g, page, key, x, y, label, val, w := 220) {
+    th := Ui.th
+    on := g.Add("Text", Format("x{} y{} w46 h22 Center +0x200 Background{}", x, y, th.accent), "ON")
+    on.SetFont("s8 w700 c" . th.onAccent, "Segoe UI")
+    off := g.Add("Text", Format("x{} y{} w46 h22 Center +0x200 Background{}", x, y, th.line), "OFF")
+    off.SetFont("s8 w700 c" . th.muted, "Segoe UI")
+    t := g.Add("Text", Format("x{} y{} w{} h22 +0x200", x + 58, y, w), label)
+    t.SetFont("s9 c" . th.txt, "Segoe UI")
+    h := FlipHandler(key)
+    on.OnEvent("Click", h)
+    off.OnEvent("Click", h)
+    t.OnEvent("Click", h)
+    Reg(page, on)
+    Reg(page, off)
+    Reg(page, t)
+    Ui.tog[key] := val ? true : false
+    Ui.togCtl[key] := [on, off]
+    Ui.togPage[key] := page
+}
+
+FlipHandler(key) {
+    return (*) => FlipToggle(key)
+}
+
+FlipToggle(key) {
+    SetToggle(key, !Ui.tog[key])
+    OnUiChange()
+}
+
+SetToggle(key, v) {
+    v := v ? true : false
+    Ui.tog[key] := v
+    if (Ui.page == Ui.togPage[key]) {
+        p := Ui.togCtl[key]
+        p[1].Visible := v
+        p[2].Visible := !v
+    }
+}
+
+NavHandler(pg) {
+    return (*) => ShowPage(pg)
+}
+
+ThemeHandler(name) {
+    return (*) => ChangeTheme(name)
+}
+
+ShowPage(name) {
+    Ui.page := name
+    for pg, list in Ui.pages {
+        vis := (pg == name)
+        for c in list
+            c.Visible := vis
+    }
+    for key, v in Ui.tog {
+        if (Ui.togPage[key] == name) {
+            p := Ui.togCtl[key]
+            p[1].Visible := v
+            p[2].Visible := !v
+        }
+    }
+    for pg, trio in Ui.nav {
+        sel := (pg == name)
+        trio[1].Visible := !sel
+        trio[2].Visible := sel
+        trio[3].Visible := sel
+    }
+    ApplyRunVis()
+}
+
+ApplyRunVis() {
+    on := (Ui.page == "dash")
+    run := BotState.running
+    Ui.btnStart.Visible := on && !run
+    Ui.btnStop.Visible := on && run
+}
+
+ChangeTheme(name) {
+    if (name == Cfg.theme)
+        return
+    SyncSettings(false)
+    Cfg.theme := name
+    SaveSettings()
+    SetTimer(RebuildGui.Bind(Ui.page), -10)
+}
+
+RebuildGui(page) {
+    try Ui.gui.Destroy()
+    BuildGui(page)
+}
+
+ToggleUrlMask(*) {
+    Ui.urlShown := !Ui.urlShown
+    SendMessage(0x00CC, Ui.urlShown ? 0 : 0x25CF, 0, Ui.hkUrl)
+    DllCall("InvalidateRect", "ptr", Ui.hkUrl.Hwnd, "ptr", 0, "int", 1)
+    Ui.btnShow.Text := Ui.urlShown ? "Hide" : "Show"
+}
+
+IdxOf(arr, val, def := 1) {
+    for i, v in arr {
+        if (v == val)
+            return i
+    }
+    return def
+}
+
+PageHeader(g, page, title, sub) {
+    th := Ui.th
+    Lbl(g, page, 214, 16, 590, title, th.txt, 18, 700)
+    Lbl(g, page, 214, 60, 590, sub, th.muted, 9)
+    Box(g, page, 214, 88, 590, 1, th.line)
+}
+
+Tile(g, x, y, w, label, key, lblKey := "") {
+    th := Ui.th
+    Box(g, "dash", x, y, w, 76, th.card)
+    v := g.Add("Text", Format("x{} y{} w{} h34 Background{}", x + 12, y + 8, w - 16, th.card), "0")
+    v.SetFont("s14 w700 c" . th.accent, "Segoe UI")
+    Reg("dash", v)
+    l := g.Add("Text", Format("x{} y{} w{} h20 Background{}", x + 12, y + 48, w - 16, th.card), label)
+    l.SetFont("s8 c" . th.muted, "Segoe UI")
+    Reg("dash", l)
+    Ui.%key% := v
+    if (lblKey != "")
+        Ui.%lblKey% := l
+}
+
+ThemeCard(g, name, x, y) {
+    th := Ui.th
+    t := THEMES[name]
+    sel := (name == Cfg.theme)
+    h := ThemeHandler(name)
+    Box(g, "look", x - 3, y - 3, 192, 90, sel ? th.accent : th.line)
+    c := Box(g, "look", x, y, 186, 84, t.bg)
+    c.OnEvent("Click", h)
+    s := Box(g, "look", x, y, 38, 84, t.side)
+    s.OnEvent("Click", h)
+    Box(g, "look", x + 52, y + 14, 30, 10, t.accent)
+    Box(g, "look", x + 88, y + 14, 30, 10, t.good)
+    Box(g, "look", x + 124, y + 14, 30, 10, t.bad)
+    n := g.Add("Text", Format("x{} y{} w{} h26 +0x200 Background{}", x + 52, y + 34, 128, t.bg)
+        , name . (sel ? "   (active)" : ""))
+    n.SetFont("s10 w600 c" . t.txt, "Segoe UI")
+    n.OnEvent("Click", h)
+    Reg("look", n)
+    k := g.Add("Text", Format("x{} y{} w{} h18 Background{}", x + 52, y + 62, 128, t.bg), t.dark ? "Dark" : "Light")
+    k.SetFont("s8 c" . t.muted, "Segoe UI")
+    k.OnEvent("Click", h)
+    Reg("look", k)
+}
+
+; ============================================================================
+;  MAIN WINDOW
+; ============================================================================
+BuildGui(startPage := "dash") {
+    th := THEMES.Has(Cfg.theme) ? THEMES[Cfg.theme] : THEMES["Midnight"]
+    Ui.th := th
+    g := Gui("+MinimizeBox", APP_NAME . "  v" . APP_VERSION)
+    g.BackColor := th.bg
+    g.MarginX := 0
+    g.MarginY := 0
+    g.SetFont("s9 c" . th.txt, "Segoe UI")
     g.OnEvent("Close", (*) => ExitApp())
-
-    g.Add("GroupBox", "x10 y8 w480 h58", "Display")
-    g.Add("Text", "x24 y33", "Screen resolution:")
-    Ui.res := g.Add("DropDownList", "x140 y29 w150", ["Auto", "1920x1080", "2560x1440"])
-    try Ui.res.Choose(Cfg.resolution)
-    if (Ui.res.Value == 0)
-        Ui.res.Choose(1)
-    g.Add("Text", "x300 y33 w180 cGray", "Screen: " . A_ScreenWidth . "x" . A_ScreenHeight)
-
-    g.Add("GroupBox", "x10 y72 w480 h150", "Fishing")
-    g.Add("Text", "x24 y96", "Rod hotbar slot:")
-    Ui.rod := g.Add("DropDownList", "x125 y92 w50", ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"])
-    try Ui.rod.Choose(Cfg.rodSlot)
-    if (Ui.rod.Value == 0)
-        Ui.rod.Choose(4)
-    Ui.fast := g.Add("Checkbox", "x200 y94 w140", "Faster bite reaction")
-    Ui.slow := g.Add("Checkbox", "x345 y94 w135", "Slower fish trick")
-    Ui.chest := g.Add("Checkbox", "x24 y126 w140", "Collect chests")
-    Ui.anchor := g.Add("Checkbox", "x200 y126 w280", "Anchor at the NPC on start (recommended)")
-    Ui.perfect := g.Add("Checkbox", "x24 y154 w300", "Perfect cast (release at full charge)")
-    Ui.zoomLock := g.Add("Checkbox", "x24 y184 w200", "Lock camera zoom (in, then out)")
-    g.Add("Text", "x250 y186", "Zoom-out notches:")
-    Ui.zoomOut := g.Add("Edit", "x365 y182 w50 Number", Cfg.zoomOut)
-    g.Add("UpDown", "Range0-30", Cfg.zoomOut)
-    Ui.fast.Value := Cfg.fastBite ? 1 : 0
-    Ui.slow.Value := Cfg.slowFlick ? 1 : 0
-    Ui.chest.Value := Cfg.chest ? 1 : 0
-    Ui.anchor.Value := Cfg.anchor ? 1 : 0
-    Ui.perfect.Value := Cfg.perfect ? 1 : 0
-    Ui.zoomLock.Value := Cfg.zoomLock ? 1 : 0
-
-    g.Add("GroupBox", "x10 y228 w480 h92", "Shop")
-    Ui.buy := g.Add("Checkbox", "x24 y250 w140", "Buy bait")
-    Ui.buy.Value := Cfg.buyBait ? 1 : 0
-    g.Add("Text", "x170 y251", "Bait now (0 = don't track):")
-    Ui.baitNow := g.Add("Edit", "x345 y247 w60 Number", Cfg.baitNow)
-    g.Add("UpDown", "Range0-9999", Cfg.baitNow)
-    g.Add("Text", "x24 y283", "Bait per purchase:")
-    Ui.baitPer := g.Add("Edit", "x170 y279 w60 Number", Cfg.baitPer)
-    g.Add("UpDown", "Range10-999", Cfg.baitPer)
-    Ui.sell := g.Add("Checkbox", "x250 y283 w90", "Sell every")
-    Ui.sell.Value := Cfg.sellOn ? 1 : 0
-    Ui.sellEvery := g.Add("Edit", "x345 y279 w60 Number", Cfg.sellEvery)
-    g.Add("UpDown", "Range0-9999", Cfg.sellEvery)
-    g.Add("Text", "x412 y283", "catches")
-
-    Ui.start := g.Add("Button", "x10 y330 w140 h30 Default", "Start  (F2)")
-    Ui.start.OnEvent("Click", ToggleRun)
-    btnCheck := g.Add("Button", "x160 y330 w140 h30", "Check setup")
-    btnCheck.OnEvent("Click", CheckSetup)
-    btnQuit := g.Add("Button", "x350 y330 w140 h30", "Quit  (F4)")
-    btnQuit.OnEvent("Click", (*) => ExitApp())
-    Ui.status := g.Add("Text", "x10 y368 w480", "Status: Idle")
-
-    Ui.log := g.Add("Edit", "x10 y388 w480 r13 ReadOnly -Wrap +VScroll")
-    g.Show("w500")
     Ui.gui := g
+    Ui.pages := Map()
+    Ui.nav := Map()
+    Ui.tog := Map()
+    Ui.togCtl := Map()
+    Ui.togPage := Map()
+    Ui.urlShown := false
+    Ui.page := "dash"
+    for pg in ["dash", "fish", "shop", "hook", "look"]
+        Ui.pages[pg] := []
+
+    ; ---- sidebar -----------------------------------------------------------
+    Box(g, "", 0, 0, 190, 640, th.side)
+    t := g.Add("Text", Format("x24 y22 w164 h34 Background{}", th.side), "BLOX FISHING")
+    t.SetFont("s15 w700 c" . th.accent, "Segoe UI")
+    t := g.Add("Text", Format("x24 y58 w160 h20 Background{}", th.side), "Auto macro  -  v" . APP_VERSION)
+    t.SetFont("s8 c" . th.muted, "Segoe UI")
+    navDefs := [["dash", "Dashboard"], ["fish", "Fishing"], ["shop", "Shop and Bait"]
+              , ["hook", "Webhook"], ["look", "Appearance"]]
+    ny := 100
+    for d in navDefs {
+        n1 := g.Add("Text", Format("x0 y{} w190 h40 +0x200 Background{}", ny, th.side), "      " . d[2])
+        n1.SetFont("s10 c" . th.muted, "Segoe UI")
+        n1.OnEvent("Click", NavHandler(d[1]))
+        n2 := g.Add("Text", Format("x0 y{} w190 h40 +0x200 Background{}", ny, th.bg), "      " . d[2])
+        n2.SetFont("s10 w600 c" . th.txt, "Segoe UI")
+        n3 := g.Add("Text", Format("x0 y{} w4 h40 Background{}", ny, th.accent))
+        Ui.nav[d[1]] := [n1, n2, n3]
+        ny += 44
+    }
+    Ui.sbDot := g.Add("Text", Format("x24 y556 w160 Background{}", th.side), "●  Idle")
+    Ui.sbDot.SetFont("s9 w600 c" . th.muted, "Segoe UI")
+    t := g.Add("Text", Format("x24 y582 w160 h34 Background{}", th.side), "F2 start / stop    F4 quit`nF8 debug log file")
+    t.SetFont("s8 c" . th.muted, "Segoe UI")
+
+    ; ---- DASHBOARD ---------------------------------------------------------
+    PageHeader(g, "dash", "Dashboard", "Live status. Press F2 anywhere to start or stop the macro.")
+    Ui.btnStart := Btn(g, "", 214, 100, 190, 42, "Start  (F2)", ToggleRun, "primary")
+    Ui.btnStop := Btn(g, "", 214, 100, 190, 42, "Stop  (F2)", ToggleRun, "danger")
+    Btn(g, "dash", 416, 100, 150, 42, "Check setup", CheckSetup, "ghost")
+    Btn(g, "dash", 578, 100, 110, 42, "Quit  (F4)", (*) => ExitApp(), "ghost")
+    Tile(g, 214, 158, 96, "Fish caught", "tCatch")
+    Tile(g, 320, 158, 96, "Bait left", "tBait")
+    Tile(g, 426, 158, 150, "Money generated", "tIncome")
+    Tile(g, 586, 158, 104, "Level", "tLevel", "tLevelLbl")
+    Tile(g, 700, 158, 104, "Run time", "tUp")
+    Ui.info := Lbl(g, "dash", 214, 246, 590, "", th.muted, 9)
+    Lbl(g, "dash", 214, 274, 300, "Activity log", th.txt, 10, 600)
+    Box(g, "dash", 213, 298, 592, 302, th.line)
+    Ui.log := g.Add("Edit", Format("x214 y299 w590 h300 ReadOnly -Wrap +VScroll -E0x200 Background{} c{}", th.inp, th.txt))
+    Ui.log.SetFont("s9", "Consolas")
+    Reg("dash", Ui.log)
+    if th.dark {
+        try DllCall("uxtheme\SetWindowTheme", "ptr", Ui.log.Hwnd, "str", "DarkMode_Explorer", "str", "")
+    }
+
+    ; ---- FISHING -----------------------------------------------------------
+    PageHeader(g, "fish", "Fishing", "Casting, camera and reeling behaviour.")
+    Section(g, "fish", 214, 100, "CASTING")
+    AddToggle(g, "fish", "perfect", 214, 126, "Perfect cast", Cfg.perfect, 160)
+    Lbl(g, "fish", 470, 129, 90, "Release at", th.muted)
+    AddEdit(g, "fish", "perfectPct", 548, 125, 54, Cfg.perfectPct, true)
+    Lbl(g, "fish", 610, 129, 190, "% of the charge bar", th.muted)
+    AddToggle(g, "fish", "zoomLock", 214, 166, "Lock camera zoom", Cfg.zoomLock, 190)
+    Lbl(g, "fish", 470, 169, 120, "Zoom-out notches", th.muted)
+    AddEdit(g, "fish", "zoomOut", 598, 165, 54, Cfg.zoomOut, true)
+    Lbl(g, "fish", 272, 209, 170, "Re-apply the zoom every", th.muted)
+    AddEdit(g, "fish", "zoomEvery", 430, 205, 54, Cfg.zoomEvery, true)
+    Lbl(g, "fish", 492, 209, 100, "casts", th.muted)
+    Section(g, "fish", 214, 256, "REELING AND RECOVERY")
+    AddToggle(g, "fish", "chest", 214, 282, "Collect treasure chests", Cfg.chest, 200)
+    AddToggle(g, "fish", "fastBite", 500, 282, "Faster bite reaction", Cfg.fastBite, 200)
+    AddToggle(g, "fish", "slowFlick", 214, 322, "Slower fish trick", Cfg.slowFlick, 200)
+    AddToggle(g, "fish", "anchor", 500, 322, "Anchor at the NPC on start", Cfg.anchor, 200)
+    Section(g, "fish", 214, 372, "GAME")
+    Lbl(g, "fish", 214, 400, 120, "Screen resolution", th.muted)
+    AddDdl(g, "fish", "res", 340, 396, 130, ["Auto", "1920x1080", "2560x1440"]
+        , IdxOf(["Auto", "1920x1080", "2560x1440"], Cfg.resolution))
+    Lbl(g, "fish", 500, 400, 120, "Rod hotbar slot", th.muted)
+    slots := ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+    AddDdl(g, "fish", "rod", 624, 396, 60, slots, IdxOf(slots, Cfg.rodSlot, 4))
+    Lbl(g, "fish", 214, 452, 590, "Perfect cast reads the whole charge bar (orange > yellow > green) and releases when it reaches the"
+        . " chosen percentage. With zoom-out 8 the bar is small, so 96-98 % is a good value.", th.muted, 9, 400, 44)
+
+    ; ---- SHOP AND BAIT -----------------------------------------------------
+    PageHeader(g, "shop", "Shop and Bait", "Which NPC you AFK at, which bait to buy, and when to sell.")
+    Section(g, "shop", 214, 100, "NPC")
+    Lbl(g, "shop", 214, 130, 70, "AFK at", th.muted)
+    AddDdl(g, "shop", "npc", 280, 126, 150, NPC_LIST, IdxOf(NPC_LIST, Cfg.npc))
+    Ui.npcNote := Lbl(g, "shop", 214, 160, 590, "", th.muted, 9, 400, 34)
+    Section(g, "shop", 214, 202, "BAIT")
+    AddToggle(g, "shop", "buyBait", 214, 228, "Auto-buy bait when it runs low", Cfg.buyBait, 280)
+    Lbl(g, "shop", 214, 272, 90, "Bait type", th.muted)
+    baitItems := []
+    for b in BAITS
+        baitItems.Push(BaitLabel(b))
+    AddDdl(g, "shop", "bait", 300, 268, 440, baitItems, IdxOf(BAITS, CurBait(), 1))
+    Lbl(g, "shop", 214, 312, 170, "Bait in inventory now", th.muted)
+    AddEdit(g, "shop", "baitNow", 390, 308, 70, Cfg.baitNow, true)
+    Lbl(g, "shop", 470, 312, 330, "0 = do not count (max 100)", th.muted)
+    Lbl(g, "shop", 214, 352, 170, "Bait per purchase", th.muted)
+    AddDdl(g, "shop", "baitPer", 390, 348, 70, ["10", "20", "30", "40", "50", "60", "70", "80", "90", "100"]
+        , Min(10, Max(1, Cfg.baitPer // 10)))
+    Ui.costLbl := Lbl(g, "shop", 470, 352, 340, "", th.txt)
+    Lbl(g, "shop", 214, 384, 590, "The inventory holds 100 bait at most: the macro only buys what fits (50 in stock + 100 wanted = 50 bought).", th.muted)
+    Section(g, "shop", 214, 424, "SELLING AND INCOME")
+    AddToggle(g, "shop", "sellOn", 214, 450, "Auto-sell fish every", Cfg.sellOn, 140)
+    AddEdit(g, "shop", "sellEvery", 420, 446, 64, Cfg.sellEvery, true)
+    Lbl(g, "shop", 492, 450, 100, "catches", th.muted)
+    Ui.sellNote := Lbl(g, "shop", 600, 450, 210, "", th.bad, 9)
+    AddToggle(g, "shop", "trackIncome", 214, 490, "Track income (reads your $ with Windows OCR)", Cfg.trackIncome, 400)
+    AddToggle(g, "shop", "trackLevel", 214, 520, "Track levels (reads your level with Windows OCR)", Cfg.trackLevel, 400)
+    Lbl(g, "shop", 214, 556, 590, "Sea 2 and Sea 3 baits also need their material (Demonic Wisp, Yeti Fur, Terror Eyes, Dragon Scale)"
+        . " in your inventory. Locked baits cannot be bought.", th.muted, 9, 400, 34)
+
+    ; ---- WEBHOOK -----------------------------------------------------------
+    PageHeader(g, "hook", "Webhook", "Send progress, sales and an hourly report to a Discord channel.")
+    Section(g, "hook", 214, 100, "DISCORD")
+    AddToggle(g, "hook", "hkOn", 214, 126, "Enable webhook", Cfg.hkOn, 200)
+    Lbl(g, "hook", 214, 166, 300, "Webhook URL", th.muted)
+    AddEdit(g, "hook", "hkUrl", 214, 188, 400, Cfg.hkUrl, false, true)
+    Ui.btnShow := Btn(g, "hook", 622, 188, 56, 24, "Show", ToggleUrlMask, "ghost")
+    Ui.btnShow.SetFont("s9 w600 c" . th.txt, "Segoe UI")
+    Btn(g, "hook", 686, 188, 118, 24, "Send test", HookTest, "primary")
+    Lbl(g, "hook", 214, 226, 180, "Display name", th.muted)
+    AddEdit(g, "hook", "hkName", 214, 248, 170, Cfg.hkName)
+    Lbl(g, "hook", 400, 226, 300, "Mention user ID on errors (optional)", th.muted)
+    AddEdit(g, "hook", "hkMention", 400, 248, 214, Cfg.hkMention)
+    Section(g, "hook", 214, 296, "WHAT TO SEND")
+    AddToggle(g, "hook", "hkStart", 214, 322, "Macro started", Cfg.hkStart, 200)
+    AddToggle(g, "hook", "hkStop", 500, 322, "Stopped + session summary", Cfg.hkStop, 230)
+    AddToggle(g, "hook", "hkSale", 214, 362, "Fish sold", Cfg.hkSale, 200)
+    AddToggle(g, "hook", "hkShot", 500, 362, "Attach the sale screenshot", Cfg.hkShot, 230)
+    AddToggle(g, "hook", "hkBait", 214, 402, "Bait purchased", Cfg.hkBait, 200)
+    AddToggle(g, "hook", "hkErr", 500, 402, "Errors and safety stops", Cfg.hkErr, 230)
+    AddToggle(g, "hook", "hkHourly", 214, 442, "Hourly report", Cfg.hkHourly, 120)
+    Lbl(g, "hook", 400, 446, 50, "every", th.muted)
+    AddEdit(g, "hook", "hkEveryMin", 440, 442, 56, Cfg.hkEveryMin, true)
+    Lbl(g, "hook", 504, 446, 40, "min", th.muted)
+    Btn(g, "hook", 600, 440, 204, 28, "Send report now", SendHourly, "ghost")
+    Lbl(g, "hook", 214, 490, 590, "The hourly report lists money generated, bait bought (and money spent), fish caught, net profit and"
+        . " fish per hour. The sale screenshot is the strip below the screen centre, taken right after selling.", th.muted, 9, 400, 44)
+    Ui.hookStatus := Lbl(g, "hook", 214, 548, 590, "", th.muted, 9)
+
+    ; ---- APPEARANCE --------------------------------------------------------
+    PageHeader(g, "look", "Appearance", "Pick a theme. It applies instantly and is remembered.")
+    px := 214
+    py := 112
+    for nm in THEME_ORDER {
+        ThemeCard(g, nm, px, py)
+        px += 202
+        if (px > 640) {
+            px := 214
+            py += 104
+        }
+    }
+
+    ShowPage(startPage)
+    g.Show("w830 h620")
+    if th.dark {
+        try {
+            b := Buffer(4, 0)
+            NumPut("Int", 1, b)
+            DllCall("dwmapi\DwmSetWindowAttribute", "ptr", g.Hwnd, "int", 20, "ptr", b, "int", 4)
+        }
+    }
+    try {
+        Ui.log.Value := BotState.logBuf
+        n := StrLen(BotState.logBuf)
+        SendMessage(0x00B1, n, n, Ui.log)
+        SendMessage(0x00B7, 0, 0, Ui.log)                    ; EM_SCROLLCARET
+    }
+    RefreshDynamic()
+    SetStatus()
 }
 
 Cleanup(*) {
@@ -2488,10 +3771,14 @@ Cleanup(*) {
 ; ============================================================================
 DllCall("winmm\timeBeginPeriod", "UInt", 1)          ; 1 ms timer resolution
 OnExit(Cleanup)
+CleanTmp()
 LoadSettings()
+ResetHour()
 BuildGui()
 Hotkey("F2", ToggleRun)
 Hotkey("F4", (*) => ExitApp())
 Hotkey("F8", ToggleDebug)
-LogMsg(APP_NAME . " ready. Stand at the Fisherman (Interact prompt visible), rod equipped, "
+SetTimer(UpdateStats, 1000)
+SetTimer(HourlyTick, 15000)
+LogMsg(APP_NAME . " ready. Stand at the " . Cfg.npc . " (Interact prompt visible), rod equipped, "
     . "Shift Lock OFF, then press F2.")
