@@ -296,7 +296,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.13.0"
+APP_VERSION := "1.14.0"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
@@ -379,7 +379,7 @@ Cfg := {
   , npc: "Fisherman", buyBait: true, baitType: "Basic Bait", baitNow: 0, baitPer: 40, baitRow: 0
   , sellOn: true, sellEvery: 100, trackIncome: true, trackLevel: true
   , theme: "Midnight"
-  , hkOn: false, hkUrl: "", hkName: "Blox Fishing Macro", hkMention: ""
+  , hkOn: false, hkUrl: "", hkUrlHourly: "", hkName: "Blox Fishing Macro", hkMention: ""
   , hkStart: true, hkStop: true, hkSale: true, hkShot: true, hkBait: true
   , hkHourly: true, hkEveryMin: 60, hkErr: true
   , hkBuy: true, hkCast: false, hkCatch: true, hkCatchShot: false, hkChest: true
@@ -2910,6 +2910,7 @@ SETTINGS_SPEC := [
   , ["shop", "trackLevel", "1", "b"]
   , ["webhook", "hkOn", "0", "b"]
   , ["webhook", "hkUrl", "", "s"]
+  , ["webhook", "hkUrlHourly", "", "s"]
   , ["webhook", "hkName", "Blox Fishing Macro", "s"]
   , ["webhook", "hkMention", "", "s"]
   , ["webhook", "hkStart", "1", "b"]
@@ -2997,6 +2998,7 @@ SyncSettings(save := true) {
         Cfg.sellEvery := Max(0, IntOf(Ui.sellEvery, 100))
         Cfg.hkEveryMin := Max(1, IntOf(Ui.hkEveryMin, 60))
         Cfg.hkUrl := Trim(Ui.hkUrl.Value)
+        Cfg.hkUrlHourly := Trim(Ui.hkUrlHourly.Value)
         nm := Trim(Ui.hkName.Value)
         Cfg.hkName := (nm != "") ? nm : "Blox Fishing Macro"
         Cfg.hkMention := RegExReplace(Ui.hkMention.Value, "\D")
@@ -3255,8 +3257,18 @@ JsonEsc(s) {
     return s
 }
 
+UrlIsHook(u) {
+    return RegExMatch(u, "i)^https://(?:(?:canary|ptb)\.)?discord(?:app)?\.com/api/(?:v\d+/)?webhooks/\d+/[\w-]+$") ? true : false
+}
+
 HookUrlOk() {
-    return RegExMatch(Cfg.hkUrl, "i)^https://(?:(?:canary|ptb)\.)?discord(?:app)?\.com/api/(?:v\d+/)?webhooks/\d+/[\w-]+$") ? true : false
+    return UrlIsHook(Cfg.hkUrl)
+}
+
+; Channel for the hourly report: its own webhook when one is given and valid,
+; otherwise the main one.
+HourlyUrl() {
+    return UrlIsHook(Cfg.hkUrlHourly) ? Cfg.hkUrlHourly : Cfg.hkUrl
 }
 
 HookReady() {
@@ -3290,7 +3302,7 @@ EmbedJson(title, desc, color, fields := "", imageName := "") {
 ; optional PNG is attached as multipart. The HTTP status is logged ~5 s later.
 ; Messages go through a queue (one every 2.2 s) so a busy macro never trips
 ; Discord's rate limit. Low-priority live-activity messages are dropped when it is full.
-HookPost(embeds, filePath := "", content := "", label := "message", fname := "sale.png", lowPrio := false) {
+HookPost(embeds, filePath := "", content := "", label := "message", fname := "sale.png", lowPrio := false, url := "") {
     if !HookUrlOk()
         return false
     q := BotState.hookQ
@@ -3298,7 +3310,7 @@ HookPost(embeds, filePath := "", content := "", label := "message", fname := "sa
         return false
     if (q.Length >= 40)
         q.RemoveAt(1)
-    q.Push([embeds, filePath, content, label, fname])
+    q.Push([embeds, filePath, content, label, fname, url])
     return true
 }
 
@@ -3307,11 +3319,13 @@ HookPump() {
     if !q.Length
         return
     a := q.RemoveAt(1)
-    HookSend(a[1], a[2], a[3], a[4], a[5])
+    HookSend(a[1], a[2], a[3], a[4], a[5], a.Length >= 6 ? a[6] : "")
 }
 
-HookSend(embeds, filePath := "", content := "", label := "message", fname := "sale.png") {
-    if !HookUrlOk()
+HookSend(embeds, filePath := "", content := "", label := "message", fname := "sale.png", url := "") {
+    if (url == "")
+        url := Cfg.hkUrl
+    if !UrlIsHook(url)
         return false
     curl := A_WinDir . "\System32\curl.exe"
     if !FileExist(curl) {
@@ -3336,7 +3350,7 @@ HookSend(embeds, filePath := "", content := "", label := "message", fname := "sa
         . ';type=application/json"'
     if (filePath != "" && FileExist(filePath))
         cmd .= ' -F "files[0]=@' . filePath . ';filename=' . fname . '"'
-    cmd .= ' "' . Cfg.hkUrl . '"'
+    cmd .= ' "' . url . '"'
     try {
         Run(cmd, , "Hide")
     } catch {
@@ -3527,7 +3541,7 @@ SendHourly(*) {
             shot := sp
     }
     HookPost(EmbedJson("Hourly Report", "Last " . Round(mins) . " min  |  " . Cfg.npc . "  |  "
-        . CurBait().name, 0x6C8CFF, f, (shot != "") ? "hud.png" : ""), shot, , "hourly report", "hud.png")
+        . CurBait().name, 0x6C8CFF, f, (shot != "") ? "hud.png" : ""), shot, , "hourly report", "hud.png", false, HourlyUrl())
     LogMsg("[webhook] hourly report sent")
     ResetHour()
 }
@@ -3542,6 +3556,9 @@ HookTest(*) {
     if HookPost(EmbedJson("Webhook connected", "Test message from the Blox Fishing Macro.", 0x4ADE80, f)
             , , , "test message")
         SetHookStatus("Test sent - waiting for Discord...")
+    if (UrlIsHook(Cfg.hkUrlHourly) && Cfg.hkUrlHourly != Cfg.hkUrl)
+        HookPost(EmbedJson("Hourly channel connected", "Hourly reports will be posted here.", 0x6C8CFF, f)
+            , , , "hourly test", , false, Cfg.hkUrlHourly)
 }
 
 ; ============================================================================
@@ -3783,8 +3800,10 @@ RebuildGui(page) {
 
 ToggleUrlMask(*) {
     Ui.urlShown := !Ui.urlShown
-    SendMessage(0x00CC, Ui.urlShown ? 0 : 0x25CF, 0, Ui.hkUrl)
-    DllCall("InvalidateRect", "ptr", Ui.hkUrl.Hwnd, "ptr", 0, "int", 1)
+    for ctl in [Ui.hkUrl, Ui.hkUrlHourly] {
+        SendMessage(0x00CC, Ui.urlShown ? 0 : 0x25CF, 0, ctl)
+        DllCall("InvalidateRect", "ptr", ctl.Hwnd, "ptr", 0, "int", 1)
+    }
     Ui.btnShow.Text := Ui.urlShown ? "Hide" : "Show"
 }
 
@@ -3999,7 +4018,9 @@ BuildGui(startPage := "dash") {
     AddToggle(g, "hook", "hkCatch", 214, 502, "Fish caught + progress", Cfg.hkCatch, 200)
     AddToggle(g, "hook", "hkCatchShot", 500, 502, "Catch screenshot (slower)", Cfg.hkCatchShot, 230)
     AddToggle(g, "hook", "hkChest", 214, 536, "Chest collected", Cfg.hkChest, 200)
-    Ui.hookStatus := Lbl(g, "hook", 214, 578, 590, "", th.muted, 9)
+    Lbl(g, "hook", 214, 566, 400, "Hourly report webhook URL (optional - empty = same channel)", th.muted)
+    AddEdit(g, "hook", "hkUrlHourly", 214, 588, 400, Cfg.hkUrlHourly, false, true)
+    Ui.hookStatus := Lbl(g, "hook", 214, 616, 590, "", th.muted, 9)
 
     ; ---- APPEARANCE --------------------------------------------------------
     PageHeader(g, "look", "Appearance", "Pick a theme. It applies instantly and is remembered.")
@@ -4015,7 +4036,7 @@ BuildGui(startPage := "dash") {
     }
 
     ShowPage(startPage)
-    g.Show("w830 h640")
+    g.Show("w830 h656")
     if th.dark {
         try {
             b := Buffer(4, 0)

@@ -1,6 +1,6 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.13 below).
+Current delivered file: `BloxFishing.ahk` (v1.14 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
 
 ---
@@ -156,6 +156,16 @@ Built from the screenshots you sent. Not yet tested in the game: the script was 
 - **Click diagnostics:** every click logs `[click] plus target X,Y cursor X,Y` and flags `CURSOR MISSED THE TARGET` if Windows did not move the mouse there. The cursor is first jumped to the target, then the usual nudged move and click follow.
 - The Close click used by the error recovery uses the same table.
 - Not tested in the game.
+
+---
+
+## v1.14: Separate channel for the hourly report
+
+- New field on the Webhook page: **Hourly report webhook URL (optional)**. Create a webhook in the other Discord channel and paste its URL there. Empty = hourly reports stay in the main channel.
+- "Send test" and "Send report now" also use it. The Show/Hide button reveals both URLs.
+- The main webhook still has to be enabled and valid; everything except the hourly report keeps going to it.
+- Window is a little taller (656).
+- Not tested in the game or on a real Discord channel.
 
 ---
 
