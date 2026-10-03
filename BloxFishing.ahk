@@ -296,7 +296,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.16.1"
+APP_VERSION := "1.16.2"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
@@ -1131,12 +1131,12 @@ IsMeterEdge(c) {                                       ; the black outline
     return Max((c >> 16) & 255, (c >> 8) & 255, c & 255) <= 32
 }
 
-IsMeterTrack(c) {                                      ; empty track: dark neutral blue-grey
+IsMeterTrack(c) {                                      ; empty track: dark blue-grey, bluer over bright sky/sea (25,55,69)
     rr := (c >> 16) & 255
     gg := (c >> 8) & 255
     bb := c & 255
     mx := Max(rr, gg, bb)
-    return mx > 32 && mx <= 125 && (mx - Min(rr, gg, bb)) <= 40
+    return mx > 32 && mx <= 125 && (mx - Min(rr, gg, bb)) <= 64
 }
 
 MeterReset() {
@@ -1242,7 +1242,7 @@ MeterFind(fr) {
     r := SubRect(win, fr)
     x1 := r.x, y1 := r.y
     x2 := r.x + r.w, y2 := r.y + r.h
-    cols := [0xFF9700, 0xCA7700, 0xFFCC00, 0xF0FF00, 0xB7C300, 0x1FF910]
+    cols := [0xFF9700, 0xCA7700, 0xFFCC00, 0xF0FF00, 0xB7C300, 0x1FF910, 0xAAFF00, 0x84C500, 0x6EFF08]
     Loop 60 {
         top := 99999, tx := 0
         for col in cols {

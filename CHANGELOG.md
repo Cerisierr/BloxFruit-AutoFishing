@@ -1,6 +1,6 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.16.1 below).
+Current delivered file: `BloxFishing.ahk` (v1.16.2 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
 
 ---
@@ -155,6 +155,17 @@ Built from the screenshots you sent. Not yet tested in the game: the script was 
   - The profile is the one chosen in the window (Auto = nearest to your screen size). Pixels are offsets from the top-left of the game area.
 - **Click diagnostics:** every click logs `[click] plus target X,Y cursor X,Y` and flags `CURSOR MISSED THE TARGET` if Windows did not move the mouse there. The cursor is first jumped to the target, then the usual nudged move and click follow.
 - The Close click used by the error recovery uses the same table.
+- Not tested in the game.
+
+---
+
+## v1.16.2: Cast meter not found over bright sky (Fast Mode)
+
+- **What your screenshot showed:** the fill is lime (170,255,0 in the middle, 132,197,0 at the sides) and the empty part of the track is (25,55,69) over the bright blue sky.
+- **Two causes, both fixed:**
+  - The fill search only knew orange, amber, yellow, one yellow-green and one pure green. The lime tones were not in the list, so the meter was never found. Added `0xAAFF00`, `0x84C500` and `0x6EFF08` (same tolerance).
+  - The empty-track test allowed a colour spread of 40; this track has 44-47, so the search stopped at the first empty row above the fill. The limit is now 64 (still capped at brightness 125, so sky and bright sea are rejected).
+- Checked on your screenshot: the old rules find no fill and fail at the first empty track row; the new ones find the fill top and the full track height.
 - Not tested in the game.
 
 ---
