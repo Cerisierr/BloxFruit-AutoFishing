@@ -1,7 +1,40 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.18.0 below).
+Current delivered file: `BloxFishing.ahk` (v1.18.3 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
+
+---
+
+## v1.18.3: Cast meter on a dark background (released late and weak)
+
+- **What your screenshot (1363x770, meter at x 452) showed:** the empty track inside the meter is (28-36, 26-31, 26-28), very dark. The outline is black (0-15). The code treated every pixel with max <= 32 as "outline", so the dark track interior counted as the outline and `IsMeterTrack` (which required > 32) did not accept it either.
+- **Effect (simulated on that screenshot):** the meter was measured from the top of the fill instead of the real top, so its height was just the fill height (99 px of a 213 px track) and the level read 0.99 instead of 0.46. The meter was also rejected while the fill was shorter than 7% of the window height, so nothing was seen for the first seconds of the hold, and the cast then released at once at a mid level.
+- **Fix:** outline = max <= 20 (`IsMeterEdge`), empty track = max > 20 (`IsMeterTrack`). On the same screenshot the track is now 213 px (top 495, bottom 707) and the level reads 0.46 (yellow = mid, as expected).
+- Applies to every resolution and to non-RDP too (an earlier normal-texture track was 33, only 1 above the old limit). Brighter tracks (25,55,69) are unaffected.
+- Not tested in the game.
+
+---
+
+## v1.18.2: RDP-only changes (normal desktops unchanged)
+
+- **New `Rdp.on` flag:** set automatically when Windows reports a remote session (`GetSystemMetrics(SM_REMOTESESSION)`). Override in `BloxFishing.ini`: `[game]` `rdp=auto|on|off`. The log prints `[env] remote desktop session: ON/off` at start.
+- **Gated behind it (so 1920x1080 and 2560x1440 on a normal desktop run the pre-1.18 logic):**
+  - the plain screen capture (the original `CAPTUREBLT` capture is back on a normal desktop);
+  - the salmon marker colour and the 150 ms scenery baseline of the bite detector (the original colour rule is used otherwise);
+  - the first Nevermind/Back click (original `ClickMenuAction`); only retries after a failure use the new slower, fixed-point clicks.
+- **RDP cast lead (new):** over RDP the charge bar is seen late, so the cast looks ahead by `[game]` `rdpCastLeadMs` (default 80 ms) when `castLeadMs` is 0. If casts release too early over RDP, lower it; too late, raise it. Not measured, it is a starting value.
+- **Not touched:** resolution profiles, click points, the report card (it draws its own image and does not read the screen).
+- Not tested in the game.
+
+---
+
+## v1.18.1: Stuck on Nevermind / Back
+
+- **Likely cause (from the code, no log yet):** the bottom-row click used "the last panel the detector found". The button under the cursor changes colour on hover and can drop out of the detection, so the last detected panel was a different row (for example Job Stats), and every retry repeated the same wrong click. Clicks over remote desktop could also be dropped (same effect as the Craft window in v1.11).
+- **Fix (`NevermindClick`):** the detected bottom row is used only if the stack is complete or the lowest panel is where the bottom row should be (within 4% of the window height); otherwise the calibrated bottom-row point is clicked. Each retry waits longer over the button (0.15 s up to 0.50 s) and holds the press longer (0.06 s up to 0.20 s). Attempts 3 and 5 always use the fixed point. From attempt 2 the cursor is first moved to the window centre to wake the hover state.
+- **Retries:** `LeaveDialogue` now tries 4 times (was 3); `RecoverDialogue` 4 (was 3).
+- **Log:** `[shop] nevermind/back attempt N: <how> at X,Y` on every click. If it still sticks, send those lines.
+- Not tested in the game.
 
 ---
 

@@ -132,7 +132,7 @@ class ScreenGrab {
     Capture(x, y) {
         return DllCall("BitBlt", "ptr", this.hdcMem, "int", 0, "int", 0
             , "int", this.w, "int", this.h, "ptr", this.hdcScreen
-            , "int", x, "int", y, "uint", 0x00CC0020)   ; SRCCOPY (no CAPTUREBLT: it makes the cursor flicker over RDP)
+            , "int", x, "int", y, "uint", Rdp.on ? 0x00CC0020 : 0x40CC0020)   ; SRCCOPY | CAPTUREBLT (RDP: no CAPTUREBLT, it makes the cursor flicker)
     }
 
     __Delete() {
@@ -296,7 +296,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.18.0"
+APP_VERSION := "1.18.3"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
@@ -403,6 +403,9 @@ BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
            , biteTimeouts: 0, sales: 0, purchases: 0, baitBought: 0, spent: 0
            , income: 0, unreadable: 0, levels: 0, chests: 0, started: 0.0, lastUp: 0.0}
 Hour := {started: 0.0}                                  ; counters since the last hourly report
+; Remote Desktop session. Everything added for RDP in v1.18.x is gated by Rdp.on, so
+; a normal desktop (1920x1080, 2560x1440, ...) runs exactly the pre-1.18 logic.
+Rdp := {on: false, castLead: 0.08, how: ""}
 HIST_MAX := 1200
 Hist := []                                              ; report-card samples: [elapsed s, income, levels, catches]
 
@@ -1061,12 +1064,13 @@ ProgressPresent(geo) {
 ; The "!" marker. Measured on a real RDP frame: its body is SALMON (248,117,130);
 ; only the anti-aliased edge blends towards pink/purple (170,102,143). The old
 ; rule matched only that edge (114 of ~3,300 marker pixels), so detection depended
-; on what was behind the marker. Both looks are accepted now.
+; on what was behind the marker. In an RDP session both looks are accepted; on a
+; normal desktop the original rule is used unchanged.
 IsBitePx(rr, gg, bb) {
     if (rr < 110)
         return false
-    if (rr >= 200 && gg >= 60 && gg <= 165 && bb >= 70 && bb <= 175 && rr - gg >= 70 && Abs(bb - gg) <= 45)
-        return true                                        ; salmon body
+    if (Rdp.on && rr >= 200 && gg >= 60 && gg <= 165 && bb >= 70 && bb <= 175 && rr - gg >= 70 && Abs(bb - gg) <= 45)
+        return true                                        ; salmon body (RDP colour pipeline only)
     if (bb > gg && rr >= bb) {                             ; pink edge (previous rule)
         d := rr - gg
         e := bb - gg
@@ -1256,8 +1260,8 @@ IsMeterFill(c) {
     return bb < 90 && mx > 140 && (mx - bb) > 110
 }
 
-IsMeterEdge(c) {                                       ; the black outline
-    return Max((c >> 16) & 255, (c >> 8) & 255, c & 255) <= 32
+IsMeterEdge(c) {                                       ; the black outline (measured 0-15; the track interior is 28-36)
+    return Max((c >> 16) & 255, (c >> 8) & 255, c & 255) <= 20
 }
 
 IsMeterTrack(c) {                                      ; empty track: dark blue-grey, bluer over bright sky/sea (25,55,69)
@@ -1265,7 +1269,7 @@ IsMeterTrack(c) {                                      ; empty track: dark blue-
     gg := (c >> 8) & 255
     bb := c & 255
     mx := Max(rr, gg, bb)
-    return mx > 32 && mx <= 125 && (mx - Min(rr, gg, bb)) <= 64
+    return mx > 20 && mx <= 125 && (mx - Min(rr, gg, bb)) <= 64
 }
 
 MeterReset() {
@@ -2107,11 +2111,53 @@ OpenNpcDialogue() {
     return false
 }
 
+; Click the bottom row (Back / Nevermind) of the NPC stack. The button under the
+; cursor changes colour on hover and can drop out of the panel detection, which
+; used to make "the last detected panel" a different row (e.g. Job Stats). Now:
+;   * if the stack is complete, or the lowest detected panel is where the bottom
+;     row should be, that panel is clicked;
+;   * otherwise (a row is missing) the calibrated bottom-row point is clicked;
+;   * every retry waits longer over the button and holds the press longer, and
+;     attempts 3 and 5 always use the fixed point, so one wrong reading cannot
+;     repeat forever. From attempt 2 the cursor is first moved away to wake the
+;     game's hover state (remote desktop drops small mouse moves).
+NevermindClick(attempt := 1) {
+    if (!Rdp.on && attempt == 1) {                     ; normal desktop: first try is the original click
+        ClickMenuAction("root", "nevermind")
+        return
+    }
+    win := BotState.win
+    expected := PageRows("root")
+    settle := Min(0.50, 0.15 + 0.15 * (attempt - 1))
+    hold := Min(0.20, 0.06 + 0.06 * (attempt - 1))
+    panels := MenuPanels()
+    n := panels.Length
+    fixed := PtAbs(Points.menuLast)
+    pt := fixed
+    how := "fixed point"
+    if (n >= 2 && !(attempt >= 3 && Mod(attempt, 2) == 1)) {
+        low := panels[n]
+        if (n >= expected || Abs(low.y - fixed.y) <= win.h * 0.04) {
+            pt := {x: low.x, y: low.y}
+            how := "bottom row of " . n . " panels"
+        } else {
+            how := "fixed point (only " . n . "/" . expected . " panels, lowest one too high)"
+        }
+    }
+    if (attempt >= 2) {
+        MouseMove(win.x + win.w // 2, win.y + win.h // 2, 0)
+        Sleep(80)
+    }
+    BotState.witness := ""
+    LogMsg("[shop] nevermind/back attempt " . attempt . ": " . how . " at " . pt.x . "," . pt.y)
+    Mouse.ClickAt(pt.x, pt.y, settle, hold)
+}
+
 ; Leave the dialogue. Fisherman: Back -> Nevermind, waiting for each page.
 ; Angler (or any layout where the bait page and the root page look alike): the
 ; bottom row is "Back" on the bait page and "Nevermind" on the root page, so
 ; clicking it repeatedly walks out either way.
-LeaveDialogue(tries := 3) {
+LeaveDialogue(tries := 4) {
     Wait(ShopCfg.beforeLeave)
     if !WaitUntil(() => MenuPanels().Length >= 2, ShopCfg.rootTimeout)
         return !InDialogue()
@@ -2126,7 +2172,7 @@ LeaveDialogue(tries := 3) {
     Loop tries {
         if (!Alive() || !InDialogue())
             return true
-        ClickMenuAction("root", "nevermind")
+        NevermindClick(A_Index)
         if WaitUntil(() => !InDialogue(), ShopCfg.nevermindRetry)
             return true
         if (MenuPanels().Length >= PageRows("root"))
@@ -2142,7 +2188,7 @@ LeaveByBottomRow() {
         if (!Alive() || !InDialogue())
             return true
         Wait(ShopCfg.pageSettle)
-        ClickMenuAction("root", "nevermind")
+        NevermindClick(A_Index)
         if WaitUntil(() => !InDialogue(), ShopCfg.nevermindRetry)
             return true
         Wait(ShopCfg.afterBack)
@@ -2160,10 +2206,10 @@ RecoverDialogue() {
             Mouse.ClickAt(p.x, p.y)
             Wait(0.5)
         }
-        Loop 3 {
+        Loop 4 {
             if !Alive()
                 break
-            ClickMenuAction("root", "nevermind")
+            NevermindClick(A_Index)
             Wait(0.7)
             if !InDialogue()
                 break
@@ -2503,6 +2549,9 @@ DoCast() {
     ; tick and released the moment it reaches the threshold on the way up. If the
     ; first rise is missed, it simply waits for the next one (up to castHold s).
     thr := Min(100, Max(60, Cfg.perfectPct)) / 100.0
+    lead := Timing.releaseLead                           ; RDP shows the bar late: look ahead by that delay
+    if (Rdp.on && lead <= 0)
+        lead := Rdp.castLead
     Loop Timing.maxCastAttempts {
         attempt := A_Index
         MeterReset()
@@ -2532,7 +2581,7 @@ DoCast() {
                 prevT := tn
                 if (lv > peak)
                     peak := lv
-                if (lv + Max(0.0, rate) * Timing.releaseLead >= thr) {
+                if (lv + Max(0.0, rate) * lead >= thr) {
                     perfect := true
                     break
                 }
@@ -2587,7 +2636,10 @@ DoCast() {
 }
 
 WaitForBite() {
-    BiteBaseline()
+    BotState.biteBase := 0
+    BotState.biteBaseN := 0
+    if Rdp.on
+        BiteBaseline()
     if BotState.biteBaseN
         LogMsg("[bite] " . BotState.biteBaseN . " marker-coloured cells already on screen - ignored")
     minHold := Cfg.fastBite ? 0.04 : 0.15      ; le "!" doit rester visible au moins ce temps (s)
@@ -3144,6 +3196,15 @@ SETTINGS_SPEC := [
   , ["webhook", "hkCatchShot", "0", "b"]
   , ["webhook", "hkChest", "1", "b"]
 ]
+
+; [game] rdp=auto|on|off in BloxFishing.ini (auto = Windows reports a remote session).
+DetectRdp() {
+    mode := StrLower(Trim(IniRead(INI_FILE, "game", "rdp", "auto")))
+    sess := DllCall("GetSystemMetrics", "int", 0x1000) != 0          ; SM_REMOTESESSION
+    Rdp.on := (mode == "on") || (mode != "off" && sess)
+    Rdp.how := (mode == "auto") ? (sess ? "detected" : "not detected") : "forced " . mode
+    try Rdp.castLead := Float(IniRead(INI_FILE, "game", "rdpCastLeadMs", "80")) / 1000
+}
 
 LoadSettings() {
     for s in SETTINGS_SPEC {
@@ -4762,6 +4823,7 @@ DllCall("winmm\timeBeginPeriod", "UInt", 1)          ; 1 ms timer resolution
 OnExit(Cleanup)
 CleanTmp()
 LoadSettings()
+DetectRdp()
 ResetHour()
 BuildGui()
 Hotkey("F2", ToggleRun)
@@ -4772,5 +4834,7 @@ SetTimer(UpdateStats, 1000)
 SetTimer(HourlyTick, 15000)
 SetTimer(HookPump, 2200)
 SetTimer(HistPush, 20000)
+LogMsg("[env] remote desktop session: " . (Rdp.on ? "ON" : "off") . " (" . Rdp.how . ")"
+    . (Rdp.on ? " - RDP-only bite filter, plain screen capture and cast lead " . Round(Rdp.castLead * 1000) . " ms are active" : ""))
 LogMsg(APP_NAME . " ready. Stand at the " . Cfg.npc . " (Interact prompt visible), rod equipped, "
     . "Shift Lock OFF, then press F2.")
