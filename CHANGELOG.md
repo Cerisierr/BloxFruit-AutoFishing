@@ -1,6 +1,6 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.14 below).
+Current delivered file: `BloxFishing.ahk` (v1.15 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
 
 ---
@@ -155,6 +155,16 @@ Built from the screenshots you sent. Not yet tested in the game: the script was 
   - The profile is the one chosen in the window (Auto = nearest to your screen size). Pixels are offsets from the top-left of the game area.
 - **Click diagnostics:** every click logs `[click] plus target X,Y cursor X,Y` and flags `CURSOR MISSED THE TARGET` if Windows did not move the mouse there. The cursor is first jumped to the target, then the usual nudged move and click follow.
 - The Close click used by the error recovery uses the same table.
+- Not tested in the game.
+
+---
+
+## v1.15: Reel bar lost over flat / bright scenery (Fast mode)
+
+- **What the video showed:** with the "Fast" texture-less mode the bar's translucent track is lighter and bluer over the sky/sea (about 47,53,56) than the old rule accepted (blue 34 +/-14). Only the part over dark wood matched. When the zone turned grey against the left edge the match fell below 25%, the macro decided the bar was gone and released the mouse for about 2 s while the fish escaped.
+- **Track colour:** widened to any dark neutral/blue-grey (blue 18-66, red and green <= 70, channels within 14 of each other). Your normal-texture screenshot (33,30,29) and the Fast-mode video (47,53,56) both match.
+- **Track threshold:** the "track background gone" test now needs 10% instead of 25%.
+- **Zone hidden but progress strip still up:** the macro now keeps the last mouse state instead of releasing it.
 - Not tested in the game.
 
 ---

@@ -296,7 +296,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.14.0"
+APP_VERSION := "1.15.0"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
@@ -654,8 +654,10 @@ FocusGame() {
 ; ============================================================================
 ;  VISION - colour rules (RGB) ported from vision.py
 ; ============================================================================
+; Dark neutral / slightly blue panel. The track is translucent, so it is darker
+; over wood (33,30,29) and lighter over bright flat sea or sky (47,53,56).
 IsTrackPx(r, g, b) {
-    return Abs(b - 34) <= 14 && Abs(b - g) <= 12 && Abs(g - r) <= 12
+    return b >= 18 && b <= 66 && r <= 70 && g <= 70 && Abs(b - g) <= 14 && Abs(g - r) <= 14
 }
 
 IsZonePx(r, g, b) {                          ; green zone, normal + alarm look
@@ -870,7 +872,7 @@ ReadBar(geo, zoneWRef, chestMinW) {
             gg := (v >> 8) & 255
             bb := v & 255
             total++
-            if (Abs(bb - 34) <= 14 && Abs(bb - gg) <= 12 && Abs(gg - rr) <= 12)
+            if (bb >= 18 && bb <= 66 && rr <= 70 && gg <= 70 && Abs(bb - gg) <= 14 && Abs(gg - rr) <= 14)
                 trackHits++
             if (Abs(bb - rr) <= 16
                 && ((gg > bb + 10 && gg > rr + 10 && gg > 62)
@@ -934,7 +936,7 @@ ReadBar(geo, zoneWRef, chestMinW) {
 
     if (nz < 2)
         return 0
-    if (total && trackHits / total < 0.25)               ; track background gone
+    if (total && trackHits / total < 0.10)               ; track background gone
         return 0
 
     fl := (bfLen >= 2) ? bfS : -1
@@ -2496,6 +2498,7 @@ Reel(spend := true) {
     progress := -1.0
     lostSince := 0.0
     stalling := false
+    lastHold := false
     flicked := false
     timedOut := false
     t0 := Now()
@@ -2523,8 +2526,9 @@ Reel(spend := true) {
                 if ProgressPresent(geo) {                ; zone hidden (chest / alarm)
                     if !stalling {
                         stalling := true
-                        LogMsg("[reel] zone hidden - bar still up, holding on")
+                        LogMsg("[reel] zone hidden - bar still up, keeping the last input")
                     }
+                    Mouse.Hold(lastHold)                 ; keep pushing the way we were going
                     lostSince := 0.0
                     continue
                 }
@@ -2585,6 +2589,7 @@ Reel(spend := true) {
 
         d := reelCtl.Step(tn, zoneC, target, zoneHalf)
         Mouse.Hold(d.hold)
+        lastHold := d.hold
 
         if !(chestUntil > 0.0 && tn < chestUntil) {
             ae := Abs(d.err)
