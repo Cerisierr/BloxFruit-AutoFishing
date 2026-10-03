@@ -35,6 +35,7 @@ if !A_IsAdmin {
 class Mouse {
     static down := false
     static asserted := 0.0
+    static trace := false                               ; log every menu click (used during anchor / quest visits)
 
     ; Drive the left button to `state`; re-assert every 150 ms so a dropped
     ; SendInput event can never leave the reel zone jammed against a wall.
@@ -58,6 +59,8 @@ class Mouse {
 
     ; Real injected movement so Roblox's GUI cursor follows (used for menus).
     static ClickAt(x, y, settle := 0.15, holdSec := 0.06) {
+        if this.trace
+            LogMsg("[click] menu click at " . x . "," . y)
         MouseMove(x - 4, y - 4, 0)
         Sleep(30)
         MouseMove(4, 4, 0, "R")
@@ -73,6 +76,7 @@ class Keys {
     static SC_W := 0x11
     static SC_S := 0x1F
     static SC_LSHIFT := 0x2A
+    static SKILLS := Map("Z", 0x2C, "X", 0x2D, "C", 0x2E, "V", 0x2F, "F", 0x21)   ; fishing-rod skill keys
     static DIGITS := Map("1", 0x02, "2", 0x03, "3", 0x04, "4", 0x05, "5", 0x06
                        , "6", 0x07, "7", 0x08, "8", 0x09, "9", 0x0A, "0", 0x0B)
 
@@ -296,7 +300,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.18.5"
+APP_VERSION := "1.20.0"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
@@ -323,6 +327,8 @@ Regions := {
     money: [0.0220, 0.7000, 0.1450, 0.7620],   ; the $ counter digits (bottom-left HUD), "$" sign excluded
     level: [0.0030, 0.7620, 0.1200, 0.8060],   ; "Lv. 868" under the $ counter
     hud:   [0.0000, 0.6950, 0.2000, 0.8100]    ; $ + level block, attached to the hourly report
+  , quest: [0.0000, 0.4000, 0.2600, 0.6400]    ; quest panel (top-left HUD): title, objective n/m, progress bar, reward
+  , questText: [0.2000, 0.7400, 0.8000, 0.8800] ; NPC name banner + dialogue line ("Lookin' to do something for me?")
 }
 
 ; Click points as fractions of the game window: [x, y].
@@ -336,11 +342,12 @@ Points := {
     craftBtn:  [0.5000, 0.6473],
     craftClose:[0.6590, 0.2773],
     learn:     [0.7697, 0.7008]
+  , dialogueText: [0.5000, 0.8200]   ; the NPC speech box (click = next line / close)
 }
 
 ; Timings in seconds (same defaults as the Python build).
 Timing := {
-    castHold: 5.00, releaseLead: 0.0, castSettle: 1.60, maxCastAttempts: 4, castRetryGap: 0.45
+    castHold: 5.00, releaseLead: 0.0, castSettle: 1.60, quickHold: 0.30, quickSettle: 1.00, maxCastAttempts: 4, castRetryGap: 0.45
   , biteClickDelay: 0.05, biteToBar: 5.0, maxWaitBite: 30.0, maxReel: 12.0
   , flickGap: 0.08, flickSlowDelay: 0.50, flickSlowGap: 0.50, flickSettle: 0.50
   , catchConfirm: 0.30, popupDelay: 1.60, catchClickGap: 0.35, catchSettle: 0.55
@@ -378,13 +385,14 @@ Cfg := {
     resolution: "Auto", rodSlot: "4", fastBite: false, slowFlick: false
   , chest: true, anchor: true, flick: true, perfect: true, perfectPct: 97
   , zoomLock: true, zoomOut: 8, zoomEvery: 5, tiltPx: 70, gameFast: true
+  , questOn: true, questKey: "Z"
   , npc: "Fisherman", buyBait: true, baitType: "Basic Bait", baitNow: 0, baitPer: 40, baitRow: 0
   , sellOn: true, sellEvery: 100, trackIncome: true, trackLevel: true
   , theme: "Midnight"
   , hkOn: false, hkUrl: "", hkUrlHourly: "", hkName: "Blox Fishing Macro", hkMention: ""
   , hkStart: true, hkStop: true, hkSale: true, hkShot: true, hkBait: true
   , hkHourly: true, hkEveryMin: 60, hkErr: true
-  , hkBuy: true, hkCast: false, hkCatch: true, hkCatchShot: false, hkChest: true
+  , hkBuy: true, hkCast: false, hkCatch: true, hkCatchShot: false, hkChest: true, hkQuest: true
 }
 
 ; Runtime state.
@@ -397,12 +405,14 @@ BotState := {
   , meterFull: 0, biteInfo: "", zoomedAt: -1, biteMisses: 0
   , npcHits: 0, hpNext: 0.0, hpLostSince: 0.0, hpDead: false, paused: false, stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: []
   , biteBase: 0, biteBaseN: 0, biteFrame: 0, biteFrameW: 0, biteFrameH: 0
+  , questState: "unknown", questType: "", questRarity: "", questTimed: false, questRead: 0.0, questMiss: 0
+  , questNextTry: 0.0, questAcceptedAt: 0.0, questFails: 0, questStreak: 0, questHandFails: 0, questSkillUses: 0
 }
 Meter := {x: 0, top: 0, bot: 0}
 BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
            , biteTimeouts: 0, sales: 0, purchases: 0, baitBought: 0, spent: 0
-           , income: 0, unreadable: 0, levels: 0, chests: 0, started: 0.0, lastUp: 0.0}
-Hour := {started: 0.0}                                  ; counters since the last hourly report
+           , income: 0, unreadable: 0, levels: 0, chests: 0, quests: 0, started: 0.0, lastUp: 0.0}
+Hour :={started: 0.0}                                  ; counters since the last hourly report
 PrevHour := {valid: false, secs: 0.0, catches: 0, income: 0, levels: 0}   ; the report window before this one (for the comparison)
 ; Remote Desktop session. Everything added for RDP in v1.18.x is gated by Rdp.on, so
 ; a normal desktop (1920x1080, 2560x1440, ...) runs exactly the pre-1.18 logic.
@@ -444,6 +454,8 @@ MenuRow(page, action) {
             return (Cfg.baitRow > 0) ? Cfg.baitRow : CurBait().slot
         case "confirm":
             return 1
+        case "quest":                                    ; Angler: "Lookin' to do something for me?"  Yes / No / Back
+            return (action == "yes") ? 1 : 2
     }
     return 1
 }
@@ -457,6 +469,8 @@ PageRows(page) {
             return 3
         case "confirm":
             return 2
+        case "quest":
+            return 3
         case "bait":
             if (Cfg.npc == "Angler")
                 return 4
@@ -581,7 +595,7 @@ Tally(field, n := 1) {
 
 ResetHour() {
     for k in ["casts", "catches", "escapes", "sales", "purchases", "baitBought", "spent"
-            , "income", "unreadable", "levels", "chests", "bites", "missedBar", "biteTimeouts"]
+            , "income", "unreadable", "levels", "chests", "quests", "bites", "missedBar", "biteTimeouts"]
         Hour.%k% := 0
     Hour.started := Now()
 }
@@ -2281,6 +2295,17 @@ ClearNpcRange(why) {
 
 ; One confirmed NPC dialogue is the position reset on F2.
 EstablishAnchor() {
+    Mouse.trace := true
+    try ok := EstablishAnchorCore()
+    catch as err {
+        Mouse.trace := false
+        throw err
+    }
+    Mouse.trace := false
+    return ok
+}
+
+EstablishAnchorCore() {
     LogMsg("[start] opening NPC dialogue to establish fishing position")
     if !OpenNpcDialogue() {
         LogMsg("[start] NPC anchor failed - stand at the NPC on the edge of interaction range")
@@ -2549,6 +2574,8 @@ DoCast() {
     ; (fills, then drains again), so it is measured against the track height every
     ; tick and released the moment it reaches the threshold on the way up. If the
     ; first rise is missed, it simply waits for the next one (up to castHold s).
+    if !Cfg.perfect
+        return DoQuickCast()
     thr := Min(100, Max(60, Cfg.perfectPct)) / 100.0
     lead := Timing.releaseLead                           ; RDP shows the bar late: look ahead by that delay
     if (Rdp.on && lead <= 0)
@@ -2636,6 +2663,29 @@ DoCast() {
     return false
 }
 
+; Perfect cast OFF: no need to find or read the charge meter (the search is what made the
+; cast slow). Press, hold a short fixed time, release. A swallowed press (it hit the NPC)
+; shows as an open dialogue, so that is the only check.
+DoQuickCast() {
+    Loop Timing.maxCastAttempts {
+        attempt := A_Index
+        Mouse.Tap(Timing.quickHold)
+        Wait(0.15)
+        if EscapeDialogue()
+            continue
+        BotState.npcHits := 0
+        Tally("casts")
+        LogMsg("[cast] #" . BotStats.casts . (attempt == 1 ? "" : " (attempt " . attempt . ")") . " - quick cast")
+        HookCast(-1)
+        Wait(Timing.quickSettle)
+        return true
+    }
+    Tally("casts")
+    LogMsg("[cast] #" . BotStats.casts . " unverified - continuing")
+    Wait(Timing.quickSettle)
+    return false
+}
+
 WaitForBite() {
     BotState.biteBase := 0
     BotState.biteBaseN := 0
@@ -2643,7 +2693,8 @@ WaitForBite() {
         BiteBaseline()
     if BotState.biteBaseN
         LogMsg("[bite] " . BotState.biteBaseN . " marker-coloured cells already on screen - ignored")
-    minHold := Cfg.fastBite ? 0.04 : 0.15      ; le "!" doit rester visible au moins ce temps (s)
+    fast := FastBiteOn()                       ; Fast bite setting, or forced on by a "perfect reaction" quest
+    minHold := fast ? 0.04 : 0.15              ; le "!" doit rester visible au moins ce temps (s)
     deadline := Now() + Timing.maxWaitBite
     firstSeen := 0
     while (Alive(true) && Now() < deadline) {
@@ -2651,7 +2702,7 @@ WaitForBite() {
             if (firstSeen == 0)
                 firstSeen := Now()
             if (Now() - firstSeen >= minHold) {
-                if !Cfg.fastBite
+                if !fast
                     Sleep(Round(Timing.biteClickDelay * 1000))
                 Mouse.Tap()
                 BotStats.bites += 1
@@ -2663,7 +2714,7 @@ WaitForBite() {
         } else {
             firstSeen := 0
         }
-        Sleep(Cfg.fastBite ? 1 : 8)
+        Sleep(fast ? 1 : 8)
     }
     BotStats.biteTimeouts += 1
     LogMsg("[bite] timed out, recasting (" . BotState.biteInfo . ")")
@@ -2702,6 +2753,9 @@ Reel(spend := true) {
         if s0
             zoneWRef := Max(zoneWRef, s0.zr - s0.zl)
     }
+
+    if QuestSkillWanted()                                ; "use a rod skill 3 times" quest: one skill per reel
+        QuestUseSkill()
 
     reelCtl.Reset()
     chestMinW := Cfg.chest ? Floor(0.035 * tw) : 0
@@ -2925,6 +2979,412 @@ TogglePause(*) {
     try Ui.btnPause.Text := BotState.paused ? "Resume  (F3)" : "Pause  (F3)"
 }
 
+; ============================================================================
+;  ANGLER QUEST  (one quest every 15 min: accept at the Angler, fish, hand in)
+; ============================================================================
+; The four quests: catch a Common..Mythical fish / catch 3 fish within 2:05 /
+; 3 perfect casts + 3 perfect reactions / use a fishing-rod skill 3 times.
+; The 15 min cooldown starts when a quest is ACCEPTED. A quest that is still open must
+; be finished (or abandoned) before the Angler offers a new one, so the macro only asks
+; for a new quest when the quest panel (top-left HUD) shows nothing.
+; Finished = the progress bar is full (bright yellow) / the counters read n/n.
+QuestOn() {
+    return Cfg.questOn && Cfg.npc == "Angler"
+}
+
+QuestLabel() {
+    switch BotState.questType {
+        case "rarity":
+            return "catch a " . (BotState.questRarity != "" ? StrLower(BotState.questRarity) . " " : "") . "fish"
+        case "timed":
+            return "catch 3 fish in 2 min"
+        case "perfect":
+            return "3 perfect casts + 3 reactions"
+        case "skill":
+            return "use a rod skill 3 times"
+    }
+    return "unknown quest"
+}
+
+QuestShort() {
+    switch BotState.questState {
+        case "active":
+            return "Quest: " . QuestLabel()
+        case "done":
+            return "Quest: handing in"
+        case "none":
+            left := BotState.questNextTry - Now()
+            return (left > 30) ? "Quest in " . Ceil(left / 60) . " min" : "Quest: asking"
+    }
+    return "Quest: checking"
+}
+
+QuestTimedActive() {
+    return QuestOn() && BotState.questState == "active" && BotState.questTimed
+}
+
+; "Perfect reaction" quest: react to the bite as fast as the Fast bite mode does.
+FastBiteOn() {
+    return Cfg.fastBite || (QuestOn() && BotState.questState == "active" && BotState.questType == "perfect")
+}
+
+QuestSkillWanted() {
+    return QuestOn() && BotState.questState == "active" && BotState.questType == "skill" && BotState.questSkillUses < 8
+}
+
+QuestUseSkill() {
+    sc := Keys.SKILLS.Has(Cfg.questKey) ? Keys.SKILLS[Cfg.questKey] : Keys.SKILLS["Z"]
+    Keys.Tap(sc, 0.08)
+    BotState.questSkillUses += 1
+    LogMsg("[quest] rod skill " . Cfg.questKey . " used (" . BotState.questSkillUses . ")")
+}
+
+; Is the quest progress bar full? A thin, long, bright-yellow bar in the quest panel.
+; Thick yellow areas (sand, clothes) are rejected by the thickness limits.
+QuestBarDone() {
+    win := BotState.win
+    r := SubRect(win, Regions.quest)
+    gr := ScreenGrab.Get(r.w, r.h)
+    gr.Capture(r.x, r.y)
+    bits := gr.bits
+    w := r.w, h := r.h
+    minRun := Round(win.w * 0.125)
+    minT := Max(3, Round(win.h * 0.006))
+    maxT := Round(win.h * 0.022)
+    thick := 0
+    y := 0
+    while (y <= h) {
+        hit := false
+        if (y < h) {
+            base := y * w * 4
+            inRun := false, start := 0, last := 0, best := 0
+            x := 0
+            while (x < w) {
+                v := NumGet(bits, base + x * 4, "UInt")
+                rr := (v >> 16) & 255
+                gg := (v >> 8) & 255
+                bb := v & 255
+                if (rr >= 220 && gg >= 180 && bb <= 90 && rr >= gg) {
+                    if !inRun {
+                        inRun := true
+                        start := x
+                    }
+                    last := x
+                } else if (inRun && x - last > 4) {
+                    best := Max(best, last - start)
+                    inRun := false
+                }
+                x += 2
+            }
+            if inRun
+                best := Max(best, last - start)
+            hit := (best >= minRun)
+        }
+        if hit {
+            thick += 2
+        } else {
+            if (thick >= minT && thick <= maxT)
+                return true
+            thick := 0
+        }
+        y += 2
+    }
+    return false
+}
+
+; OCR text of the quest panel -> {active, done, timed, type, rarity, cur, tot, text}.
+QuestParse(txt) {
+    t := RegExReplace(txt, "\s+", " ")
+    q := {active: false, done: false, timed: false, type: "other", rarity: "", cur: 0, tot: 0, text: t}
+    if !RegExMatch(t, "i)trust|catch|within|remain|perfect|skill|deliver|fishin")
+        return q
+    q.active := true
+    q.timed := RegExMatch(t, "i)within|remain|minute|\b\d:\d\d\b") ? true : false
+    n := 0
+    allDone := true
+    pos := 1
+    while RegExMatch(t, "(\d{1,3})\s*/\s*(\d{1,3})", &m, pos) {
+        pos := m.Pos + Max(1, m.Len)
+        c := Integer(m[1])
+        tt := Integer(m[2])
+        if (tt < 1 || tt > 20)
+            continue
+        n++
+        if (n == 1) {
+            q.cur := c
+            q.tot := tt
+        }
+        if (c < tt)
+            allDone := false
+    }
+    q.done := (n > 0 && allDone)
+    if RegExMatch(t, "i)perfect") {
+        q.type := "perfect"
+    } else if RegExMatch(t, "i)skill") {
+        q.type := "skill"
+    } else if RegExMatch(t, "i)catch\s+(?:an?\s+)?(common|uncommon|rare|epic|legendary|mythic\w*)\s+fish", &rm) {
+        q.type := "rarity"
+        q.rarity := rm[1]
+    } else if q.timed {
+        q.type := "timed"
+    }
+    return q
+}
+
+; Fold what the panel shows into the quest state.
+QuestApply(q) {
+    st := BotState.questState
+    if !q.active {
+        if (st == "active" || st == "done") {
+            BotState.questMiss += 1                      ; one empty read may be an OCR miss
+            if (BotState.questMiss < 2)
+                return
+            LogMsg("[quest] the quest panel is gone - the quest is over (handed in, timed out or abandoned)")
+        }
+        BotState.questMiss := 0
+        BotState.questState := "none"
+        return
+    }
+    BotState.questMiss := 0
+    BotState.questTimed := q.timed
+    if (st != "active" && st != "done") {
+        BotState.questSkillUses := 0
+        BotState.questType := q.type
+        BotState.questRarity := q.rarity
+        LogMsg("[quest] active quest: " . QuestLabel() . (q.tot > 0 ? "  (" . q.cur . "/" . q.tot . ")" : "")
+            . (q.timed ? "  - timed" : ""))
+        if (q.type == "other")
+            LogMsg("[quest] UNKNOWN quest text (send this line + a screenshot): '" . SubStr(RegExReplace(q.text, "\s+", " "), 1, 200) . "'")
+    } else if (q.type != "other" && q.type != BotState.questType) {
+        BotState.questType := q.type
+        BotState.questRarity := q.rarity
+    }
+    if (q.done || st == "done") {
+        if (st != "done")
+            LogMsg("[quest] objective complete (" . q.cur . "/" . q.tot . ") - handing it in")
+        BotState.questState := "done"
+    } else {
+        BotState.questState := "active"
+    }
+}
+
+QuestRead() {
+    BotState.questRead := Now()
+    r := SubRect(BotState.win, Regions.quest)
+    path := TMP_DIR . "\quest.png"
+    if !PngSave(r.x, r.y, r.w, r.h, path)
+        return
+    raw := OcrFile(path)
+    if RegExMatch(raw, "^ERR:") {
+        LogMsg("[quest] OCR failed: " . raw)
+        return
+    }
+    q := QuestParse(raw)
+    BotState.lastOcr := q.text
+    QuestApply(q)
+}
+
+; Once per cycle, with the HUD visible: the bar is checked every cycle (cheap pixel
+; scan), the panel text every 20 s (timed quest) / 45 s (others) with OCR.
+QuestTick() {
+    if !QuestOn()
+        return
+    st := BotState.questState
+    if (st == "unknown") {
+        QuestRead()
+        return
+    }
+    if (st == "active") {
+        if QuestBarDone() {
+            BotState.questState := "done"
+            LogMsg("[quest] the progress bar is full - handing the quest in")
+            return
+        }
+        if (Now() - BotState.questRead >= (BotState.questTimed ? 20 : 45))
+            QuestRead()
+    }
+}
+
+QuestDue() {
+    if (!QuestOn() || BotState.questFails >= 3)
+        return false
+    st := BotState.questState
+    if (st == "done")
+        return true
+    return (st == "none" && Now() >= BotState.questNextTry)
+}
+
+; The dialogue text line of the NPC ("Lookin' to do something for me?").
+QuestDialogText() {
+    r := SubRect(BotState.win, Regions.questText)
+    path := TMP_DIR . "\quest_dialog.png"
+    if !PngSave(r.x, r.y, r.w, r.h, path)
+        return ""
+    return RegExReplace(OcrFile(path), "\s+", " ")
+}
+
+QuestFail(why) {
+    BotState.questFails += 1
+    BotState.questNextTry := Now() + 60
+    if (BotState.questFails >= 3)
+        LogMsg("[quest] 3 failed visits in a row - auto-quest is off until the macro is restarted")
+    return ShopFail(why, "quest")
+}
+
+; The NPC speech after "Yes" (or after a hand-in) is a text-only box: the gold name banner
+; and one line, NO buttons. It stays on screen until it is clicked (the Angler's "Use your
+; fishing rod's skill 3 times." line). Click the box until the banner is gone or the button
+; stack comes back. Returns true when it clicked at least once.
+AdvanceDialogueText(maxClicks := 6) {
+    clicked := 0
+    Loop maxClicks {
+        if !Alive()
+            break
+        if (MenuPanels().Length >= 2)
+            break                                        ; buttons are back: LeaveDialogue takes over
+        if !DialogueHeader()
+            break                                        ; no banner: the speech is closed
+        p := PtAbs(Points.dialogueText)
+        clicked += 1
+        LogMsg("[quest] text-only dialogue on screen - clicking to continue (" . clicked . ")")
+        Mouse.ClickAt(p.x, p.y, 0.20, 0.08)
+        Wait(0.7)
+    }
+    return clicked > 0
+}
+
+; Talk to the Angler: Quest. A finished quest is handed in by that one click (then the
+; menu is left with Nevermind). When a quest is on offer the page is "Lookin' to do
+; something for me?  Yes / No / Back": Yes accepts it.
+QuestVisit() {
+    mode := (BotState.questState == "done") ? "turnin" : "accept"
+    LogMsg("[quest] talking to the Angler: " . (mode == "turnin" ? "handing in the finished quest" : "asking for a quest"))
+    Mouse.trace := true
+    try r := QuestVisitCore(mode)
+    catch as err {
+        Mouse.trace := false
+        throw err
+    }
+    Mouse.trace := false
+    return r
+}
+
+QuestVisitCore(mode) {
+    if !OpenNpcDialogue()
+        return QuestFail("NPC dialogue never opened")
+    if !WaitMenuPage("root", ShopCfg.rootTimeout + 1.0)
+        return QuestFail("the Angler menu did not settle")
+    ClickMenuAction("root", "quest")
+    Wait(1.8)                                            ; let the answer text appear
+
+    offered := false
+    deadline := Now() + 8.0
+    while (Alive() && Now() < deadline) {
+        n := MenuPanels().Length
+        if (n == PageRows("quest")) {
+            if WaitMenuPage("quest", 1.6) {
+                offered := true
+                break
+            }
+        } else if (n == PageRows("root")) {
+            if WaitMenuPage("root", 1.6)
+                break                                    ; back on the Angler menu: nothing more to answer
+        } else if (n < 2 && DialogueHeader()) {
+            AdvanceDialogueText(1)                       ; text-only answer (hand-in thanks, etc.): click it away
+        }
+        Wait(0.15)
+    }
+    if !Alive()
+        return false
+
+    txt := QuestDialogText()
+    LogMsg("[quest] the Angler says: '" . txt . "'" . (offered ? "  (Yes / No / Back page)" : "  (no answer page)"))
+    accepted := false
+    if offered {
+        isOffer := RegExMatch(txt, "i)lookin|do something|something for me") ? true : false
+        if (!isOffer && txt == "")                       ; OCR gave nothing: trust the empty quest panel
+            isOffer := (BotState.questState == "none")
+        if isOffer {
+            LogMsg("[quest] a quest is on offer - answering Yes")
+            ClickMenuAction("quest", "yes")
+            accepted := true
+            Wait(1.2)
+            AdvanceDialogueText()                        ; the quest line must be clicked or the dialogue stays stuck
+        } else {
+            LogMsg("[quest] this is not the quest offer (maybe an abandon prompt) - NOT answering, backing out")
+        }
+    }
+
+    if !LeaveDialogue() {
+        LogMsg("[quest] the dialogue did not close - stopping safely")
+        Halt("the NPC dialogue would not close after the quest talk")
+        return true
+    }
+    Wait(ShopCfg.afterNevermind)
+    SetRod(true)
+    EnterFishingStance(true)
+    NoteResponse()
+    Wait(1.0)
+    QuestAfterVisit(mode, accepted)
+    return true
+}
+
+; Read the quest panel again and decide what the visit achieved.
+QuestAfterVisit(mode, accepted) {
+    BotState.questState := "none"                        ; the panel now decides
+    BotState.questMiss := 0
+    QuestRead()
+    st := BotState.questState
+    if (mode == "turnin") {
+        if (st == "done") {
+            BotState.questHandFails += 1
+            LogMsg("[quest] the quest still shows as finished (hand-in attempt " . BotState.questHandFails . ")")
+            if (BotState.questHandFails >= 3) {
+                LogMsg("[quest] giving up on this hand-in - clearing it")
+                BotState.questHandFails := 0
+                BotState.questState := "none"
+                BotState.questNextTry := Now() + 120
+            }
+            return
+        }
+        BotState.questHandFails := 0
+        Tally("quests")
+        LogMsg("[quest] quest handed in (" . BotStats.quests . " this session)")
+        HookQuest("Quest completed", "The Angler quest was handed in.")
+        if (!accepted && BotState.questNextTry < Now() + 20)
+            BotState.questNextTry := Now() + 20
+    }
+    if accepted {
+        if (st == "active") {
+            BotState.questAcceptedAt := Now()
+            BotState.questNextTry := Now() + 905         ; next offer: 15 min after accepting
+            BotState.questStreak := 0
+            BotState.questFails := 0
+            LogMsg("[quest] accepted: " . QuestLabel())
+            HookQuest("Quest accepted", QuestLabel())
+        } else {
+            LogMsg("[quest] answered Yes but no quest panel showed up - checking again soon")
+            BotState.questNextTry := Now() + 45
+        }
+        return
+    }
+    if (mode == "accept") {
+        if (st == "active" || st == "done")
+            return                                       ; a quest was open after all: normal tracking takes over
+        BotState.questStreak += 1
+        delay := Min(300, 60 * BotState.questStreak)
+        BotState.questNextTry := Now() + delay
+        LogMsg("[quest] nothing to accept - asking again in " . delay . " s")
+    }
+}
+
+HookQuest(title, desc) {
+    if !(HookReady() && Cfg.hkQuest)
+        return
+    f := [["Quests done this session", BotStats.quests]]
+    HookPost(EmbedJson(title, desc, 0xFBBF24, f), , , "quest")
+}
+
 NeedsBait() {
     return Cfg.buyBait && BotState.bait >= 0 && BotState.bait <= ShopCfg.buyAt
 }
@@ -2968,8 +3428,19 @@ Cycle() {
         SendHourly()
     }
 
-    sellDue := NeedsSell()
-    baitDue := NeedsBait()
+    ; Angler quest: hand in / ask for a quest first (a timed quest must be handed in fast).
+    QuestTick()
+    visited := false
+    if QuestDue() {
+        QuestVisit()
+        visited := true
+        if !Alive()
+            return
+    }
+    ; A timed quest (3 fish in 2 min) is not interrupted by a sale or a bait trip, unless bait is nearly gone.
+    timedQuest := QuestTimedActive()
+    sellDue := NeedsSell() && !timedQuest
+    baitDue := NeedsBait() && !(timedQuest && BotState.bait > 5)
     if sellDue
         LogMsg("[sell] due: " . BotState.sinceSell . " catches since the last sale")
     if baitDue
@@ -2986,7 +3457,7 @@ Cycle() {
             return
     }
 
-    if (sellDue || baitDue)
+    if (visited || sellDue || baitDue)
         ClearNpcRange("after the shop")
     if (BotState.bait == 0) {                          ; tracked count hit zero and nothing bought it back
         Halt("out of bait" . (Cfg.buyBait ? "" : " (enable auto-buy to restock automatically)"))
@@ -3063,6 +3534,18 @@ RunBot() {
     BotState.levelLast := -1
     BotState.levelRead := Now()
     BotState.reportDue := false
+    BotState.questState := "unknown"
+    BotState.questType := ""
+    BotState.questRarity := ""
+    BotState.questTimed := false
+    BotState.questRead := 0.0
+    BotState.questMiss := 0
+    BotState.questNextTry := 0.0
+    BotState.questAcceptedAt := 0.0
+    BotState.questFails := 0
+    BotState.questStreak := 0
+    BotState.questHandFails := 0
+    BotState.questSkillUses := 0
     MeterReset()
 
     LogMsg("[start] npc=" . Cfg.npc . " bait=" . CurBait().name . " buyBait=" . (Cfg.buyBait ? "on" : "OFF") . " baitNow=" . Cfg.baitNow
@@ -3113,6 +3596,7 @@ ResetStats() {
     BotStats.unreadable := 0
     BotStats.levels := 0
     BotStats.chests := 0
+    BotStats.quests := 0
     BotStats.lastUp := 0.0
     BotStats.started := Now()
     Hist.Length := 0
@@ -3169,6 +3653,8 @@ SETTINGS_SPEC := [
   , ["camera", "zoomEvery", "5", "i"]
   , ["camera", "tiltPx", "70", "i"]
   , ["game", "gameFast", "1", "b"]
+  , ["quest", "questOn", "1", "b"]
+  , ["quest", "questKey", "Z", "s"]
   , ["shop", "npc", "Fisherman", "s"]
   , ["shop", "buyBait", "1", "b"]
   , ["shop", "baitType", "Basic Bait", "s"]
@@ -3197,6 +3683,7 @@ SETTINGS_SPEC := [
   , ["webhook", "hkCatch", "1", "b"]
   , ["webhook", "hkCatchShot", "0", "b"]
   , ["webhook", "hkChest", "1", "b"]
+  , ["webhook", "hkQuest", "1", "b"]
 ]
 
 ; [game] rdp=auto|on|off in BloxFishing.ini (auto = Windows reports a remote session).
@@ -3239,6 +3726,9 @@ LoadSettings() {
         Cfg.npc := "Fisherman"
     if (Cfg.npc == "Angler")
         Cfg.sellOn := false
+    Cfg.questKey := StrUpper(Trim(Cfg.questKey))
+    if !Keys.SKILLS.Has(Cfg.questKey)
+        Cfg.questKey := "Z"
     ; Early-release lead in ms (0 = release on the frame that shows a full bar).
     try Timing.releaseLead := Float(IniRead(INI_FILE, "fishing", "castLeadMs", "0")) / 1000
     try Timing.shotDelay := Float(IniRead(INI_FILE, "webhook", "shotDelayMs", "500")) / 1000
@@ -3266,6 +3756,7 @@ SyncSettings(save := true) {
     try {
         Cfg.resolution := Ui.res.Text
         Cfg.rodSlot := Ui.rod.Text
+        Cfg.questKey := Ui.questKey.Text
         Cfg.npc := (Ui.npc.Text == "Angler") ? "Angler" : "Fisherman"
         idx := Ui.bait.Value
         if (idx >= 1 && idx <= BAITS.Length)
@@ -3323,6 +3814,11 @@ RefreshDynamic() {
             Ui.npcNote.Text := "The Fisherman sells bait (Shop > Buy Bait) and buys your fish (Shop > Sell Fish)."
             Ui.sellNote.Text := ""
         }
+    }
+    try {
+        Ui.questNote.Text := (Cfg.npc == "Angler")
+            ? "Every 15 min the Angler offers one quest: catch a fish of a rarity, catch 3 fish in 2 min, 3 perfect casts + 3 perfect reactions, or use a rod skill 3 times. The macro accepts it (Quest > Yes), keeps fishing, and hands it in when the progress bar is full."
+            : "Auto-quest only works when you AFK at the Angler (Shop and Bait page > AFK at)."
     }
 }
 
@@ -3823,6 +4319,7 @@ SendHourly(*) {
         , ["Bait bought", Fmt(h.baitBought) . "  ($" . Fmt(h.spent) . " spent)"]
         , ["Fish caught", Fmt(h.catches)]
         , ["Chests", h.chests]
+        , ["Quests done", h.quests]
         , ["Net profit", (net < 0 ? "-$" : "$") . Fmt(Abs(net))]
         , ["Casts / escapes", h.casts . " / " . h.escapes]
         , ["Levels gained", "+" . h.levels . "   (" . LevelText() . " this session)"]
@@ -4449,11 +4946,16 @@ UpdateStats() {
         Ui.tLevelLbl.Text := (BotStats.levels > 0) ? "Level  (+" . BotStats.levels . ")" : "Level"
         t := "Casts " . BotStats.casts . "   |   Escapes " . BotStats.escapes
             . "   |   Spent $" . Fmt(BotStats.spent)
+        if (BotState.running && QuestOn())
+            t .= "   |   " . QuestShort() . (BotStats.quests > 0 ? "  (" . BotStats.quests . " done)" : "")
         if (Cfg.sellOn && Cfg.sellEvery > 0 && Cfg.npc != "Angler")
             t .= "   |   Sale in " . Max(0, Cfg.sellEvery - BotState.sinceSell)
         if (BotState.running && HookReady() && Cfg.hkHourly)
             t .= "   |   Report in " . Max(0, Round((Cfg.hkEveryMin * 60 - (Now() - Hour.started)) / 60)) . " min"
         Ui.info.Text := t
+        try Ui.questStatus.Text := !BotState.running ? "Macro not running."
+            : QuestOn() ? QuestShort() . (BotStats.quests > 0 ? "   (" . BotStats.quests . " done this session)" : "")
+            : "Auto-quest is off or not at the Angler."
     }
 }
 
@@ -4723,7 +5225,7 @@ BuildGui(startPage := "dash") {
     Ui.togPage := Map()
     Ui.urlShown := false
     Ui.page := "dash"
-    for pg in ["dash", "fish", "shop", "hook", "look"]
+    for pg in ["dash", "fish", "quest", "shop", "hook", "look"]
         Ui.pages[pg] := []
 
     ; ---- sidebar -----------------------------------------------------------
@@ -4732,7 +5234,7 @@ BuildGui(startPage := "dash") {
     t.SetFont("s15 w700 c" . th.accent, "Segoe UI")
     t := g.Add("Text", Format("x24 y58 w160 h20 Background{}", th.side), "Auto macro  -  v" . APP_VERSION)
     t.SetFont("s8 c" . th.muted, "Segoe UI")
-    navDefs := [["dash", "Dashboard"], ["fish", "Fishing"], ["shop", "Shop and Bait"]
+    navDefs := [["dash", "Dashboard"], ["fish", "Fishing"], ["quest", "Quest"], ["shop", "Shop and Bait"]
               , ["hook", "Webhook"], ["look", "Appearance"]]
     ny := 100
     for d in navDefs {
@@ -4803,6 +5305,25 @@ BuildGui(startPage := "dash") {
     Lbl(g, "fish", 214, 452, 590, "Perfect cast reads the whole charge bar (orange > yellow > green) and releases when it reaches the"
         . " chosen percentage. With zoom-out 8 the bar is small, so 96-98 % is a good value.", th.muted, 9, 400, 44)
 
+    ; ---- QUEST -------------------------------------------------------------
+    PageHeader(g, "quest", "Quest", "Auto-quest at the NPC you AFK at.")
+    Section(g, "quest", 214, 100, "ANGLER QUEST")
+    AddToggle(g, "quest", "questOn", 214, 126, "Auto-quest (AFK at the Angler)", Cfg.questOn, 300)
+    Lbl(g, "quest", 590, 129, 96, "Rod skill key", th.muted)
+    AddDdl(g, "quest", "questKey", 690, 125, 60, ["Z", "X", "C", "V", "F"], IdxOf(["Z", "X", "C", "V", "F"], Cfg.questKey))
+    Ui.questNote := Lbl(g, "quest", 214, 166, 590, "", th.muted, 9, 400, 56)
+    Section(g, "quest", 214, 236, "STATUS")
+    Ui.questStatus := Lbl(g, "quest", 214, 262, 590, "Macro not running.", th.txt, 10, 600)
+    Section(g, "quest", 214, 306, "QUESTS THE MACRO HANDLES")
+    Lbl(g, "quest", 214, 332, 590, "1. Catch a Common / Uncommon / Rare / Epic / Legendary / Mythical fish`n"
+        . "2. Catch 3 fish within 2:05 (sales and bait trips wait while it runs)`n"
+        . "3. 3 perfect casts + 3 perfect reactions (turn Perfect cast on)`n"
+        . "4. Use a rod skill 3 times (uses the Rod skill key above)", th.muted, 9, 400, 84)
+    Section(g, "quest", 214, 436, "FISHERMAN QUESTS")
+    Lbl(g, "quest", 214, 462, 590, "The Fisherman has other quests, but the macro does not know their dialogue pages yet. "
+        . "Send a screenshot of each Fisherman quest page and of the quest panel and they can be added. "
+        . "Until then, every quest text the macro cannot match is written to the log as [quest] ... so nothing is lost.", th.muted, 9, 400, 70)
+
     ; ---- SHOP AND BAIT -----------------------------------------------------
     PageHeader(g, "shop", "Shop and Bait", "Which NPC you AFK at, which bait to buy, and when to sell.")
     Section(g, "shop", 214, 100, "NPC")
@@ -4865,6 +5386,7 @@ BuildGui(startPage := "dash") {
     AddToggle(g, "hook", "hkCatch", 214, 502, "Fish caught + progress", Cfg.hkCatch, 200)
     AddToggle(g, "hook", "hkCatchShot", 500, 502, "Catch screenshot (slower)", Cfg.hkCatchShot, 230)
     AddToggle(g, "hook", "hkChest", 214, 536, "Chest collected", Cfg.hkChest, 200)
+    AddToggle(g, "hook", "hkQuest", 500, 536, "Quest accepted / done", Cfg.hkQuest, 230)
     Lbl(g, "hook", 214, 566, 400, "Hourly report webhook URL (optional - empty = same channel)", th.muted)
     AddEdit(g, "hook", "hkUrlHourly", 214, 588, 400, Cfg.hkUrlHourly, false, true)
     Ui.hookStatus := Lbl(g, "hook", 214, 616, 590, "", th.muted, 9)

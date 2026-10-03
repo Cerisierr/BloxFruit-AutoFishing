@@ -1,7 +1,34 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.18.5 below).
+Current delivered file: `BloxFishing.ahk` (v1.20.0 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
+
+---
+
+## v1.20.0: Quest tab, quest dialogue click, quick cast
+
+- **New "Quest" tab** (sidebar, after Fishing). The Auto-quest switch and the Rod skill key moved there from the Fishing page. It also shows the live quest state, the four quests the macro handles, and a note on the Fisherman quests. The Fisherman has other quests whose dialogue pages the macro does not know yet: send a screenshot of each one. Any quest text the macro cannot match is now logged as `[quest] UNKNOWN quest text ...`.
+- **Stuck after accepting a quest (your screenshot):** after **Yes**, the Angler shows a text-only box (gold banner + "Use your fishing rod's skill 3 times.", no buttons) that stays until it is clicked. The macro thought the dialogue was closed because no buttons were showing. New `AdvanceDialogueText()`: while the gold banner is up and there is no button stack, it clicks the speech box (up to 6 times, 0.7 s apart) until the banner is gone or the buttons come back. It is used after **Yes** and also during the hand-in wait. New click point `Points.dialogueText` (0.50, 0.82).
+- **Quick cast when Perfect cast is OFF:** the old classic path still searched for the charge meter (full-region pixel search) before releasing, which is what made every cast slow. Now it is press, hold `Timing.quickHold` (0.30 s), release, then check only that no NPC dialogue opened. Wait after the cast is `Timing.quickSettle` (1.0 s instead of 1.6 s). Perfect cast ON is unchanged.
+- **Inventory opening at the anchor:** I found no key or click in the code that opens the inventory (the macro only presses the rod slot digit, Shift, W/S and Z/X/C/V/F). So I could not fix it blind. During the anchor and every quest visit the log now prints `[click] menu click at x,y` for each click, and the `[input]` / `[start]` lines show the order. Send the log lines around `[start] opening NPC dialogue` the next time the inventory opens, and say which key or button you see it with. A stuck text-only dialogue (see above) is a possible cause, since the macro went on pressing the rod slot while the dialogue was still open.
+- Not tested in the game (I cannot run AutoHotkey here).
+
+---
+
+## v1.19.0: Auto-quest at the Angler
+
+- **What it does (only with "AFK at" = Angler):** every 15 min the Angler offers one quest. The macro opens the Angler, clicks **Quest**, and when the page "Lookin' to do something for me?  Yes / No / Back" shows, answers **Yes**. It keeps fishing, and when the quest is finished it talks to the Angler again, clicks **Quest** once to hand it in, then leaves with **Nevermind**.
+- **Cooldown (from the wiki):** 15 min counted from *accepting* a quest, and an unfinished quest must be finished or abandoned before a new one is offered. So the macro only asks for a new quest when the quest panel (top-left HUD) is empty, and the next try is 15 min after the last accept. If nothing is on offer it asks again after 60 s, 120 s ... up to 300 s.
+- **How it sees the quest:** the quest panel is read with Windows OCR (title, objective, `n/m` counters, "within / remaining" for the timed one) every 20 s (timed quest) or 45 s, and the progress bar is checked every cycle by a cheap pixel scan (a long, thin, bright-yellow bar = full). Finished = bar full or every counter n/n. One empty read does not end a quest, two in a row do.
+- **Per quest type:**
+  - *Catch a Common..Mythical fish:* nothing special, normal fishing. An Epic or Mythical quest can take a long time and blocks the next one.
+  - *Catch 3 fish within 2:05:* sales and bait trips are postponed while it runs (bait trips still happen if 5 bait or fewer are left), and the hand-in has priority at the start of the next cycle.
+  - *3 perfect casts + 3 perfect reactions:* the bite reaction is forced to Fast-bite speed while this quest is active. Turn **Perfect cast** on for it.
+  - *Use a rod skill 3 times:* one rod skill key is pressed at the start of each reel until the quest is done. Key: **Rod skill key** (default Z, Reel Boost), Fishing page.
+- **Safety:** the macro never answers Yes unless the page text says "Lookin' / do something for me" (a different Yes/No page, like an abandon prompt, is backed out of). If OCR returns nothing at all it trusts the empty quest panel. Three failed visits in a row switch auto-quest off until the next start. A hand-in that does not register is retried 3 times, then dropped.
+- **New settings:** *Fishing* page > ANGLER QUEST: **Auto-quest** switch (on by default, only active with the Angler) and **Rod skill key**. *Webhook* page: **Quest accepted / done**. The hourly report has a "Quests done" field and the Dashboard line shows the quest state.
+- **Log lines:** `[quest] ...` for every step, including `[quest] the Angler says: '<text>'` after each Quest click.
+- Not tested in the game. The quest panel region, the bar colour and the hand-in page are from your screenshots only. If something is off, send the `[quest]` lines (and a screenshot of the quest panel / dialogue if the text looks wrong).
 
 ---
 
