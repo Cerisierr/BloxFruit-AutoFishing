@@ -1,6 +1,6 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.11 below).
+Current delivered file: `BloxFishing.ahk` (v1.13 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
 
 ---
@@ -136,6 +136,25 @@ Built from the screenshots you sent. Not yet tested in the game: the script was 
   - Every `+` click is verified: the "10" on the bait icon (`craftQty` region) is compared before and after. If nothing changed, the click is repeated (up to 3 times); if it still does nothing the shop trip stops with a clear error.
   - The Craft button is pressed up to 4 times, each time waiting 3 s for the window to close (was 6 s).
 - **Log:** new lines show the game area, the exact click positions and whether each `+` click changed the quantity.
+- Not tested in the game.
+
+## v1.12: Too close to the NPC (Interact prompt)
+
+- **What the video showed:** the character stood right behind the Fisherman, so the NPC filled the screen. The meter reader took the NPC's yellow coat for a full cast meter ("released at 99%", no real cast), the bite reader took its red bobber for a "!" ("hooked"), and the bar never appeared. No dialogue opened, so the v1.10 step-away never triggered.
+- **New detection:** a nearby NPC shows a floating white "Interact" prompt. The macro now reads that area (`npcLabel` region) with the Windows OCR and, if it sees the word, walks forward (W) in growing steps (0.10 s, +0.06 s each, up to 6 steps) until the prompt is gone.
+- **When it runs:** after the start-up anchor, after every shop trip (sale or bait), and every time a bite is followed by "bar never appeared".
+- **Log:** `[npc] too close ...`, `[npc] out of range after N steps`.
+- Not tested in the game: the OCR match for "Interact" is the weak point. If it never triggers, send the log line `[npc]` (or a screenshot of the prompt) and I will tune the region.
+
+## v1.13: Fixed pixels for the Craft window
+
+- **What the video showed:** the Craft window was up from 3.2 s to 7.8 s. In that time the macro clicked three times, 1.6 s apart (the verify-and-retry `+` clicks of v1.11), and the quantity never changed. The cursor stayed on the water on the right, where the bait row had been clicked, so the `+` clicks did not land on the button.
+- **Change:** the quantity comparison is removed. The Craft window now uses fixed pixels per resolution profile (`CRAFT_PX` table near `Points`):
+  - 2560x1440: `+` (1642, 738), Craft (1280, 917), Close (1702, 386), measured on your screenshot.
+  - 1920x1080: `+` (1232, 554), Craft (960, 688), Close (1277, 290), scaled from the 2560x1440 values (x0.75), not measured.
+  - The profile is the one chosen in the window (Auto = nearest to your screen size). Pixels are offsets from the top-left of the game area.
+- **Click diagnostics:** every click logs `[click] plus target X,Y cursor X,Y` and flags `CURSOR MISSED THE TARGET` if Windows did not move the mouse there. The cursor is first jumped to the target, then the usual nudged move and click follow.
+- The Close click used by the error recovery uses the same table.
 - Not tested in the game.
 
 ---

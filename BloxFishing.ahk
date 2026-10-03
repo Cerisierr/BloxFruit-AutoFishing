@@ -296,7 +296,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.11.0"
+APP_VERSION := "1.13.0"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
@@ -316,7 +316,7 @@ Regions := {
     learn: [0.6753, 0.6482, 0.8573, 0.7458],   ; recipe-note "Learn" button
     catchShot: [0.1500, 0.1200, 0.8500, 0.9000],  ; where the Species/Weight card shows (catch screenshot)
     sale:  [0.2200, 0.6200, 0.7800, 0.9200],   ; strip below the centre where the sale text pops up
-    craftQty: [0.5930, 0.4480, 0.6120, 0.4800],  ; the "10" on the bait icon: changes when + is clicked
+    npcLabel: [0.3800, 0.5800, 0.6200, 0.8600],  ; where the white "Interact" prompt of a nearby NPC floats
     craftShot: [0.2800, 0.2000, 0.7200, 0.7600], ; the Craft window (bait purchase screenshot)
     money: [0.0220, 0.7000, 0.1450, 0.7620],   ; the $ counter digits (bottom-left HUD), "$" sign excluded
     level: [0.0030, 0.7620, 0.1200, 0.8060],   ; "Lv. 868" under the $ counter
@@ -1650,6 +1650,33 @@ PanelSig(panels) {
 ; ============================================================================
 ; A real NPC dialogue = dark button stack AND the yellow name banner. Dark
 ; scenery alone (night sea, sky) or yellow clothes alone can never satisfy both.
+; Fixed click pixels of the Craft window, measured on real screenshots, per resolution
+; profile (offset from the top-left of the game area). No fractions, no image comparison.
+CRAFT_PX := Map(
+    "2560x1440", {plus: [1642, 738], craft: [1280, 917], close: [1702, 386]}
+  , "1920x1080", {plus: [1232, 554], craft: [960, 688],  close: [1277, 290]}
+)
+
+; Absolute screen position of a Craft-window pixel for the active profile.
+CraftPx(name) {
+    key := BotState.resW . "x" . BotState.resH
+    t := CRAFT_PX.Has(key) ? CRAFT_PX[key] : CRAFT_PX["1920x1080"]
+    return {x: BotState.win.x + t.%name%[1], y: BotState.win.y + t.%name%[2]}
+}
+
+; Click a fixed pixel and report where the cursor really ended up.
+ClickPx(name, holdSec := 0.12) {
+    p := CraftPx(name)
+    MouseMove(p.x, p.y, 0)                               ; first jump, then the normal nudged move + click
+    Sleep(80)
+    Mouse.ClickAt(p.x, p.y, 0.30, holdSec)
+    MouseGetPos(&mx, &my)
+    off := (Abs(mx - p.x) > 3 || Abs(my - p.y) > 3)
+    LogMsg("[click] " . name . " target " . p.x . "," . p.y . " cursor " . mx . "," . my
+        . (off ? "  <-- CURSOR MISSED THE TARGET" : ""))
+    return p
+}
+
 ; The Craft window is checked explicitly where it is expected (BuyBait,
 ; RecoverDialogue), never used to guess that a dialogue is open.
 DialogueState() {
@@ -1975,7 +2002,7 @@ LeaveByBottomRow() {
 RecoverDialogue() {
     try {
         if CraftUp() {
-            p := PtAbs(Points.craftClose)
+            p := CraftPx("close")
             Mouse.ClickAt(p.x, p.y)
             Wait(0.5)
         }
@@ -2017,6 +2044,40 @@ StepAwayFromNpc() {
     Wait(0.5)
 }
 
+; The NPC shows a floating "Interact" prompt whenever we are inside its range. Standing
+; that close the NPC overlaps the character and the meter / bite / bar detection
+; read the NPC's yellow coat and red bobber instead of the real ones.
+NpcLabelVisible() {
+    r := SubRect(BotState.win, Regions.npcLabel)
+    path := TMP_DIR . "\interact.png"
+    if !PngSave(r.x, r.y, r.w, r.h, path)
+        return false
+    txt := OcrFile(path)
+    BotState.lastOcr := RegExReplace(txt, "\s+", " ")
+    return RegExMatch(txt, "i)nter\s?a\s?c\s?t|intera") ? true : false
+}
+
+; If the "Interact" prompt is on screen, walk forward in small, growing steps until it is
+; gone. Returns true when it had to move.
+ClearNpcRange(why) {
+    if !NpcLabelVisible()
+        return false
+    LogMsg("[npc] too close to the NPC (" . why . ") - the Interact prompt is showing, stepping forward")
+    Loop 6 {
+        if !Alive()
+            return true
+        hold := Min(0.40, 0.10 + (A_Index - 1) * 0.06)
+        Keys.Tap(Keys.SC_W, hold)
+        Wait(0.6)
+        if !NpcLabelVisible() {
+            LogMsg("[npc] out of range after " . A_Index . " step" . (A_Index == 1 ? "" : "s"))
+            return true
+        }
+    }
+    LogMsg("[npc] still in range after 6 steps - move the character away from the NPC by hand")
+    return true
+}
+
 ; One confirmed NPC dialogue is the position reset on F2.
 EstablishAnchor() {
     LogMsg("[start] opening NPC dialogue to establish fishing position")
@@ -2034,6 +2095,7 @@ EstablishAnchor() {
         LogMsg("[start] Shift Lock did not engage")
         return false
     }
+    ClearNpcRange("after the anchor")
     LogMsg("[start] NPC anchor confirmed")
     return Alive()
 }
@@ -2114,36 +2176,22 @@ BuyBaitRoute() {
         return ShopFail("CRAFT window never opened for " . bait.name
             . " (is it unlocked? is the bait row right?)", "shop")
 
-    plus := PtAbs(Points.craftPlus)
-    LogMsg("[shop] craft window up - game area " . BotState.win.x . "," . BotState.win.y . " " . BotState.win.w . "x"
-        . BotState.win.h . ", + at " . plus.x . "," . plus.y . " (" . nPlus . " clicks needed)")
+    LogMsg("[shop] craft window up - profile " . BotState.resW . "x" . BotState.resH . ", game area "
+        . BotState.win.x . "," . BotState.win.y . " " . BotState.win.w . "x" . BotState.win.h
+        . " (" . nPlus . " + clicks needed)")
     Wait(0.4)                                            ; let the window finish its pop-up animation
     Loop nPlus {
-        pressed := false
-        Loop 3 {                                         ; a click is only counted once the quantity changed
-            if !Alive()
-                return false
-            before := QtyGrab()
-            Mouse.ClickAt(plus.x, plus.y, 0.30, 0.12)
-            Wait(0.35)
-            if QtyChanged(before) {
-                pressed := true
-                break
-            }
-            LogMsg("[shop] + click " . A_Index . "/3 changed nothing - clicking again")
-        }
-        if !pressed
-            return ShopFail("the + button did not respond (clicks land at " . plus.x . "," . plus.y . " - check Points.craftPlus)", "shop")
-        Wait(ShopCfg.afterPlus)
+        if !Alive()
+            return false
+        ClickPx("plus")
+        Wait(ShopCfg.afterPlus + 0.15)
     }
     shot := BaitShot()                                   ; the Craft window with the final quantity
-    craft := PtAbs(Points.craftBtn)
     closed := false
     Loop 4 {
         if !Alive()
             return false
-        LogMsg("[shop] pressing Craft at " . craft.x . "," . craft.y . " (try " . A_Index . "/4)")
-        Mouse.ClickAt(craft.x, craft.y, 0.30, 0.12)
+        ClickPx("craft")
         if WaitUntil(() => !CraftUp(), 3.0) {
             closed := true
             break
@@ -2170,33 +2218,6 @@ BuyBaitRoute() {
     EnterFishingStance()
     LogMsg("[shop] done - " . bought . " " . bait.name . " bought")
     return true
-}
-
-; Copy of the quantity area (the "10" on the bait icon) to compare before/after a "+" click.
-QtyGrab() {
-    r := SubRect(BotState.win, Regions.craftQty)
-    gr := ScreenGrab.Get(r.w, r.h)
-    gr.Capture(r.x, r.y)
-    n := r.w * r.h * 4
-    b := Buffer(n)
-    DllCall("RtlMoveMemory", "ptr", b, "ptr", gr.bits, "uptr", n)
-    return {buf: b, w: r.w, h: r.h, x: r.x, y: r.y}
-}
-
-; True when enough pixels of the quantity area differ from the earlier copy.
-QtyChanged(before) {
-    now := QtyGrab()
-    if (now.w != before.w || now.h != before.h)
-        return true
-    diff := 0
-    Loop before.w * before.h {
-        o := (A_Index - 1) * 4
-        a := NumGet(before.buf, o, "UInt"), c := NumGet(now.buf, o, "UInt")
-        d := Abs(((a >> 16) & 255) - ((c >> 16) & 255)) + Abs(((a >> 8) & 255) - ((c >> 8) & 255)) + Abs((a & 255) - (c & 255))
-        if (d > 90)
-            diff++
-    }
-    return diff >= 8
 }
 
 ; Screenshot of the Craft window just before Craft is pressed (quantity + price visible).
@@ -2711,6 +2732,8 @@ Cycle() {
             return
     }
 
+    if (sellDue || baitDue)
+        ClearNpcRange("after the shop")
     if (BotState.bait == 0) {                          ; tracked count hit zero and nothing bought it back
         Halt("out of bait" . (Cfg.buyBait ? "" : " (enable auto-buy to restock automatically)"))
         return
@@ -2731,8 +2754,11 @@ Cycle() {
     BotState.biteMisses := 0
     if !Alive()
         return
-    if Reel()
+    if Reel() {
         DismissCatch()
+    } else if Alive() {
+        ClearNpcRange("no reel bar after a bite")
+    }
     WaitBarClear()
 }
 
