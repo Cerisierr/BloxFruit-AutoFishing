@@ -308,6 +308,7 @@ RES_ORDER    := ["1920x1080", "2560x1440"]
 ; Regions as fractions of the game window: [left, top, right, bottom].
 Regions := {
     bar:   [0.2138, 0.7184, 0.8502, 0.8181],   ; reel bar search band
+    baitLine: [0.4200, 0.8700, 0.5800, 0.9200],  ; "Selected Bait: Kelp Bait x80" under the NPC label
     health: [0.0100, 0.8150, 0.2000, 0.8750],  ; HP bar (bottom-left): green fill, empty when dead
     bite:  [0.2800, 0.1600, 0.7200, 0.6000],   ; "!" marker area (excludes the top-right player list)
     meter: [0.2500, 0.3000, 0.5500, 0.8200],   ; cast charge meter: usual spot beside the character
@@ -353,7 +354,7 @@ ShopCfg := {
   , afterRod: 0.45, walkBackTap: 0.10, stepAwayTap: 0.07, stepAwayAdd: 0.03, stepAwayMax: 0.30, approachWait: 1.2, directTimeout: 0.9
   , dialogTimeout: 6.0, craftTimeout: 6.0, rootTimeout: 2.0, rootSettle: 0.9
   , nevermindRetry: 1.4, beforeLeave: 0.7, pageSettle: 0.65, poll: 0.08
-  , maxApproach: 2, afterBack: 0.5, confirmTimeout: 6.0, buyAt: 1, craftStep: 10
+  , maxApproach: 2, afterBack: 0.5, confirmTimeout: 6.0, buyAt: 20, craftStep: 10
 }
 
 ; ---- baits ------------------------------------------------------------------
@@ -394,7 +395,7 @@ BotState := {
   , atNpc: true, bait: -1, sinceSell: 0, lastResponse: 0.0, witness: ""
   , flicked: false, lastEscaped: false, buyFailures: 0, lastBought: 0
   , meterFull: 0, biteInfo: "", zoomedAt: -1, biteMisses: 0
-  , npcHits: 0, hpNext: 0.0, hpLostSince: 0.0, hpDead: false, stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: []
+  , npcHits: 0, hpNext: 0.0, hpLostSince: 0.0, hpDead: false, paused: false, stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: []
 }
 Meter := {x: 0, top: 0, bot: 0}
 BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
@@ -2753,6 +2754,32 @@ WaitBarClear() {
     }
 }
 
+; Reads "Selected Bait: <name> xN" and syncs the tracked count to what the game shows.
+ReadBaitLine() {
+    r := SubRect(BotState.win, Regions.baitLine)
+    path := TMP_DIR . "\\bait_line.png"
+    if !PngSave(r.x, r.y, r.w, r.h, path)
+        return
+    txt := OcrFile(path)
+    if !RegExMatch(txt, "i)Bait[^\r\n]*?[x" . Chr(0xD7) . "]\s*(\d{1,3})", &m)
+        return
+    n := Integer(m[1])
+    if (n > 100)
+        return
+    if (n != BotState.bait) {
+        LogMsg("[bait] game shows x" . n . " (tracked " . BotState.bait . ")")
+        SetBait(n)
+    }
+}
+
+TogglePause(*) {
+    if !BotState.running
+        return
+    BotState.paused := !BotState.paused
+    LogMsg(BotState.paused ? "[pause] paused - press Resume or F3" : "[pause] resumed")
+    try Ui.btnPause.Text := BotState.paused ? "Resume  (F3)" : "Pause  (F3)"
+}
+
 NeedsBait() {
     return Cfg.buyBait && BotState.bait >= 0 && BotState.bait <= ShopCfg.buyAt
 }
@@ -2762,6 +2789,16 @@ NeedsSell() {
 }
 
 Cycle() {
+    ; Pause: the top of a cycle is the only safe point (no mouse button held here).
+    if BotState.paused {
+        Mouse.Hold(false)
+        while (BotState.paused && BotState.running) {
+            NoteResponse()                              ; a long pause must not trip the response timeout
+            Sleep(200)
+        }
+        if !BotState.running
+            return
+    }
     UpdateStats()
     RefreshGame()
     if !FocusGame() {
@@ -2769,6 +2806,7 @@ Cycle() {
         Wait(1.0)
         return
     }
+    ReadBaitLine()
     ; Recover mid-cycle: a bar is already up (started mid-fight).
     if FindBar() {
         if Reel(false)
@@ -2843,6 +2881,7 @@ Cycle() {
 
 RunBot() {
     BotState.running := true
+    BotState.paused := false
     ResetStats()
     SyncSettings()
     profile := ApplyResolution()
@@ -2950,6 +2989,7 @@ FinishRun() {
 ToggleRun(*) {
     if BotState.running {
         BotState.running := false
+        BotState.paused := false
         LogMsg("[stop] stopping...")
         return
     }
@@ -4009,6 +4049,8 @@ ApplyRunVis() {
     run := BotState.running
     Ui.btnStart.Visible := on && !run
     Ui.btnStop.Visible := on && run
+    Ui.btnPause.Visible := on && run
+    Ui.btnCheck.Visible := on && !run
 }
 
 ChangeTheme(name) {
@@ -4138,7 +4180,8 @@ BuildGui(startPage := "dash") {
     PageHeader(g, "dash", "Dashboard", "Live status. Press F2 anywhere to start or stop the macro.")
     Ui.btnStart := Btn(g, "", 214, 100, 190, 42, "Start  (F2)", ToggleRun, "primary")
     Ui.btnStop := Btn(g, "", 214, 100, 190, 42, "Stop  (F2)", ToggleRun, "danger")
-    Btn(g, "dash", 416, 100, 150, 42, "Check setup", CheckSetup, "ghost")
+    Ui.btnCheck := Btn(g, "dash", 416, 100, 150, 42, "Check setup", CheckSetup, "ghost")
+    Ui.btnPause := Btn(g, "dash", 416, 100, 150, 42, "Pause  (F3)", TogglePause, "primary")
     Btn(g, "dash", 578, 100, 110, 42, "Quit  (F4)", (*) => ExitApp(), "ghost")
     Tile(g, 214, 158, 96, "Fish caught", "tCatch")
     Tile(g, 320, 158, 96, "Bait left", "tBait")
@@ -4299,6 +4342,7 @@ LoadSettings()
 ResetHour()
 BuildGui()
 Hotkey("F2", ToggleRun)
+Hotkey("F3", TogglePause)
 Hotkey("F4", (*) => ExitApp())
 Hotkey("F8", ToggleDebug)
 SetTimer(UpdateStats, 1000)

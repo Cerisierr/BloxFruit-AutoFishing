@@ -159,6 +159,15 @@ Built from the screenshots you sent. Not yet tested in the game: the script was 
 
 ---
 
+## v1.17: Pause button, bait read from the screen, never 0 bait
+
+- **Pause:** new **Pause (F3)** button on the Dashboard (same place as Check setup while running). The pause takes effect at the start of the next cycle, so the mouse is always released first. The pause does not trip the response timeout. Stop (F2) clears the pause.
+- **Bait count read from the game:** each cycle reads `Selected Bait: <name> xN` under the NPC label (Windows OCR) and updates the tracked bait count. The log shows `[bait] game shows xN`.
+- **Never 0:** the auto-restock threshold went from 1 to 20 bait, so the macro restocks well before it runs out.
+- Not tested in the game. The OCR of `xN` is the weak point: if the log shows wrong numbers, send me the `[bait]` lines.
+
+---
+
 ## v1.16.5: Re-anchor after a missed bite (boss event / teleport)
 
 - **What the video showed:** the camera tilts up to the sea, the character is teleported to an arena, then comes back on the dock facing sideways instead of straight ahead. Casts then miss, and the old logic only counted the misses.
