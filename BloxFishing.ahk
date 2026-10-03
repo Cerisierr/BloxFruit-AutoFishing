@@ -295,7 +295,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.8.0"
+APP_VERSION := "1.9.0"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
@@ -315,7 +315,8 @@ Regions := {
     learn: [0.6753, 0.6482, 0.8573, 0.7458],   ; recipe-note "Learn" button
     catchShot: [0.1500, 0.1200, 0.8500, 0.9000],  ; where the Species/Weight card shows (catch screenshot)
     sale:  [0.2200, 0.6200, 0.7800, 0.9200],   ; strip below the centre where the sale text pops up
-    money: [0.0030, 0.7000, 0.1450, 0.7620],   ; the $ counter (bottom-left HUD)
+    craftShot: [0.2800, 0.2000, 0.7200, 0.7600], ; the Craft window (bait purchase screenshot)
+    money: [0.0220, 0.7000, 0.1450, 0.7620],   ; the $ counter digits (bottom-left HUD), "$" sign excluded
     level: [0.0030, 0.7620, 0.1200, 0.8060],   ; "Lv. 868" under the $ counter
     hud:   [0.0000, 0.6950, 0.2000, 0.8100]    ; $ + level block, attached to the hourly report
 }
@@ -390,7 +391,7 @@ BotState := {
   , atNpc: true, bait: -1, sinceSell: 0, lastResponse: 0.0, witness: ""
   , flicked: false, lastEscaped: false, buyFailures: 0, lastBought: 0
   , meterFull: 0, biteInfo: "", zoomedAt: -1, biteMisses: 0
-  , stopReason: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: []
+  , stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: []
 }
 Meter := {x: 0, top: 0, bot: 0}
 BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
@@ -2032,11 +2033,21 @@ ShopFail(why, what) {
     return false
 }
 
+; Single place that changes the tracked bait count. Keeps the GUI field and the
+; saved setting equal to the real count, so "Bait in inventory now" is always current.
+SetBait(n) {
+    BotState.bait := n
+    Cfg.baitNow := (n > 0) ? Min(100, n) : 0
+    try Ui.baitNow.Value := Cfg.baitNow
+    SetTimer(SaveSettings, -1500)
+}
+
 BuyBait() {
     ok := BuyBaitRoute()
     if ok {
         BotState.buyFailures := 0
-        BotState.bait := Min(100, Max(0, BotState.bait) + BotState.lastBought)
+        BotState.moneyLast := -1                         ; money was spent: old baseline is stale
+        SetBait(Min(100, Max(0, BotState.bait) + BotState.lastBought))
         LogMsg("[bait] topped up to " . BotState.bait)
         return
     }
@@ -2093,6 +2104,7 @@ BuyBaitRoute() {
         Mouse.ClickAt(plus.x, plus.y)
         Wait(ShopCfg.afterPlus)
     }
+    shot := BaitShot()                                   ; the Craft window with the final quantity
     craft := PtAbs(Points.craftBtn)
     closed := false
     Loop 4 {
@@ -2114,7 +2126,7 @@ BuyBaitRoute() {
     Tally("baitBought", bought)
     Tally("spent", cost)
     NoteResponse()
-    HookBait(bait, bought, cost)
+    HookBait(bait, bought, cost, shot)
     if !LeaveDialogue() {
         LogMsg("[shop] bait bought, but the dialogue did not close - stopping safely")
         Halt("the NPC dialogue would not close after buying bait")
@@ -2127,6 +2139,16 @@ BuyBaitRoute() {
     return true
 }
 
+; Screenshot of the Craft window just before Craft is pressed (quantity + price visible).
+BaitShot() {
+    if !(HookReady() && Cfg.hkBait && Cfg.hkShot)
+        return ""
+    Wait(0.3)
+    r := SubRect(BotState.win, Regions.craftShot)
+    path := TMP_DIR . "\bait_" . FormatTime(, "yyyyMMdd_HHmmss") . ".png"
+    return PngSave(r.x, r.y, r.w, r.h, path) ? path : ""
+}
+
 ; The Angler cannot buy fish; only the Fisherman's Shop has "Sell Fish".
 SellFish(stayAtNpc := false) {
     if (Cfg.npc == "Angler") {
@@ -2135,7 +2157,18 @@ SellFish(stayAtNpc := false) {
     }
     LogMsg("[sell] selling the fish stock")
     HookSelling(BotState.sinceSell)
-    moneyBefore := Cfg.trackIncome ? ReadMoney() : -1
+    moneyBefore := -1
+    if Cfg.trackIncome {                                  ; HUD is visible now: read the $ before opening the NPC
+        Loop 3 {
+            moneyBefore := ReadMoney()
+            if (moneyBefore >= 0)
+                break
+            Wait(0.3)
+        }
+        if (moneyBefore < 0)
+            moneyBefore := BotState.moneyLast
+        LogMsg("[money] before the sale: " . (moneyBefore >= 0 ? "$" . Fmt(moneyBefore) : "unreadable (OCR: '" . BotState.lastOcr . "')"))
+    }
     if !OpenNpcDialogue()
         return ShopFail("NPC dialogue never opened", "sell")
     if !ClickActionUntil("root", "shop", () => MenuPanels().Length == PageRows("shop")
@@ -2152,8 +2185,6 @@ SellFish(stayAtNpc := false) {
         if (!Alive() || !WaitMenuPage("confirm", ShopCfg.confirmTimeout))
             break
         ClickMenuAction("confirm", "confirm")
-        if (shot == "")
-            shot := SaleShot()                           ; the sale text, bottom centre
         if WaitUntil(() => MenuPanels().Length < 2, ShopCfg.confirmTimeout) {
             sold := true
             break
@@ -2165,16 +2196,18 @@ SellFish(stayAtNpc := false) {
     Wait(ShopCfg.afterNevermind)
     fishSold := BotState.sinceSell
     gained := -1
+    after := -1
     if Cfg.trackIncome {
-        after := ReadMoney()
-        if (moneyBefore >= 0 && after >= moneyBefore) {
+        ; The HUD ($) is hidden while the NPC dialogue is up, so make sure it is gone,
+        ; then wait for the counter to settle on its new value.
+        if InDialogue()
+            LeaveDialogue()
+        after := ReadMoneyWait(moneyBefore, 10)
+        if (moneyBefore >= 0 && after >= moneyBefore)
             gained := after - moneyBefore
-        } else if (shot != "") {                         ; fall back to the sale text itself
-            v := ParseMoney(OcrFile(shot))
-            if (v > 0)
-                gained := v
-        }
+        LogMsg("[money] after the sale: " . (after >= 0 ? "$" . Fmt(after) : "unreadable (OCR: '" . BotState.lastOcr . "')"))
     }
+    shot := SaleShot()                                   ; the $ / level block AFTER the sale
     Tally("sales")
     if (gained >= 0)
         Tally("income", gained)
@@ -2184,7 +2217,7 @@ SellFish(stayAtNpc := false) {
     NoteResponse()
     LogMsg("[sell] sold " . fishSold . " fish"
         . (gained >= 0 ? " for $" . Fmt(gained) : (Cfg.trackIncome ? " (amount unreadable)" : "")))
-    HookSale(gained, fishSold, shot)
+    HookSale(gained, fishSold, shot, moneyBefore, after)
     if stayAtNpc {
         BotState.atNpc := false
         LogMsg("[sell] done - reopening the NPC for bait")
@@ -2196,12 +2229,13 @@ SellFish(stayAtNpc := false) {
     return true
 }
 
-; Screenshot of the strip below the screen centre, where the sale text pops up.
+; Screenshot of the bottom-left HUD ($ + level) right after the sale, so the new
+; balance is visible in the Discord message.
 SaleShot() {
-    if !((Cfg.hkOn && Cfg.hkShot) || Cfg.trackIncome)
+    if !(Cfg.hkOn && Cfg.hkShot)
         return ""
     Wait(Timing.shotDelay)
-    r := SubRect(BotState.win, Regions.sale)
+    r := SubRect(BotState.win, Regions.hud)
     path := TMP_DIR . "\sale_" . FormatTime(, "yyyyMMdd_HHmmss") . ".png"
     return PngSave(r.x, r.y, r.w, r.h, path) ? path : ""
 }
@@ -2359,7 +2393,7 @@ Reel(spend := true) {
         return false
     }
     if (spend && BotState.bait > 0) {                    ; bait is only used up once the minigame really starts
-        BotState.bait -= 1
+        SetBait(BotState.bait - 1)
         LogMsg("[bait] " . BotState.bait . " left")
     }
     geo := AcquireWidest(geo)
@@ -2628,7 +2662,7 @@ Cycle() {
         BotState.biteMisses += 1
         if (BotState.biteMisses >= 2 && Alive()) {
             BotState.biteMisses := 0
-            BotState.bait := 0
+            SetBait(0)
             LogMsg("[bait] two casts in a row got no bite - assuming the bait ran out")
         }
         return
@@ -2888,6 +2922,8 @@ SyncSettings(save := true) {
 ; Any field of the GUI changed.
 OnUiChange(*) {
     SyncSettings(false)
+    if (BotState.running && Cfg.baitNow != Max(0, BotState.bait) && !(BotState.bait == 0 && Cfg.baitNow == 0))
+        BotState.bait := (Cfg.baitNow > 0) ? Cfg.baitNow : -1       ; manual correction while running
     try {
         if (Cfg.npc == "Angler" && Ui.tog["sellOn"])
             SetToggle("sellOn", false)
@@ -3085,8 +3121,37 @@ ReadMoney() {
     path := TMP_DIR . "\money.png"
     if !PngSave(r.x, r.y, r.w, r.h, path)
         return -1
-    v := ParseMoney(OcrFile(path))
-    return (v >= 0 && v < 100000000000) ? v : -1
+    BotState.lastOcr := RegExReplace(OcrFile(path), "\s+", " ")
+    v := ParseMoney(BotState.lastOcr)
+    if (v >= 0 && v < 100000000000) {
+        BotState.moneyLast := v
+        return v
+    }
+    return -1
+}
+
+; Poll the $ counter until it is readable, has changed from `before` and shows the
+; same value twice in a row (the counter animates after a sale). Returns the last
+; good value (or -1). If nothing changes it gives up after `timeout` seconds.
+ReadMoneyWait(before, timeout := 10) {
+    t0 := A_TickCount
+    last := -1
+    same := 0
+    while ((A_TickCount - t0) / 1000 < timeout && Alive()) {
+        v := ReadMoney()
+        if (v >= 0) {
+            same := (v == last) ? same + 1 : 1
+            last := v
+            if (same >= 2 && (before < 0 || v != before))
+                return v
+            if (same >= 4)                                ; steady and unchanged: nothing was paid out
+                return v
+        } else {
+            same := 0
+        }
+        Wait(0.3)
+    }
+    return last
 }
 
 ; ============================================================================
@@ -3256,25 +3321,30 @@ HookStopMsg() {
     }
 }
 
-HookSale(gained, fishCount, shot) {
+HookSale(gained, fishCount, shot, before := -1, after := -1) {
     if !(HookReady() && Cfg.hkSale)
         return
     f := [["Fish sold", Fmt(fishCount)]
         , ["Money gained", gained >= 0 ? "$" . Fmt(gained) : "unreadable"]
         , ["Session income", "$" . Fmt(BotStats.income)]]
+    if (before >= 0 && after >= 0)
+        f.Push(["Balance", "$" . Fmt(before) . "  >  $" . Fmt(after), false])
     useShot := (Cfg.hkShot && shot != "" && FileExist(shot))
     HookPost(EmbedJson("Fish sold", "The fish stock was sold at the " . Cfg.npc . ".", 0x34D399, f
         , useShot ? HOOK_SHOT_NAME : ""), useShot ? shot : "", , "sale message")
 }
 
-HookBait(bait, qty, cost) {
+HookBait(bait, qty, cost, shot := "") {
     if !(HookReady() && Cfg.hkBait)
         return
     f := [["Bait", bait.name], ["Quantity", Fmt(qty)], ["Money used", "$" . Fmt(cost)]]
     if (bait.item != "")
         f.Push(["Material", (qty // 10) . " x " . bait.item])
     f.Push(["Total spent this session", "$" . Fmt(BotStats.spent)])
-    HookPost(EmbedJson("Bait purchased", "The macro restocked its bait.", 0x60A5FA, f), , , "bait message")
+    f.Push(["Bait in inventory", BotState.bait >= 0 ? Min(100, Max(0, BotState.bait) + qty) . " / 100" : "n/a"])
+    useShot := (shot != "" && FileExist(shot))
+    HookPost(EmbedJson("Bait purchased", "The macro restocked its bait.", 0x60A5FA, f, useShot ? HOOK_SHOT_NAME : "")
+        , useShot ? shot : "", , "bait message")
 }
 
 ; ---- live activity ---------------------------------------------------------
@@ -3794,7 +3864,7 @@ BuildGui(startPage := "dash") {
     AddDdl(g, "shop", "bait", 300, 268, 440, baitItems, IdxOf(BAITS, CurBait(), 1))
     Lbl(g, "shop", 214, 312, 170, "Bait in inventory now", th.muted)
     AddEdit(g, "shop", "baitNow", 390, 308, 70, Cfg.baitNow, true)
-    Lbl(g, "shop", 470, 312, 330, "0 = do not count (max 100)", th.muted)
+    Lbl(g, "shop", 470, 312, 330, "0 = do not count (max 100). Updates live while running.", th.muted)
     Lbl(g, "shop", 214, 352, 170, "Bait per purchase", th.muted)
     AddDdl(g, "shop", "baitPer", 390, 348, 70, ["10", "20", "30", "40", "50", "60", "70", "80", "90", "100"]
         , Min(10, Max(1, Cfg.baitPer // 10)))
@@ -3827,7 +3897,7 @@ BuildGui(startPage := "dash") {
     AddToggle(g, "hook", "hkStart", 214, 300, "Macro started", Cfg.hkStart, 200)
     AddToggle(g, "hook", "hkStop", 500, 300, "Stopped + session summary", Cfg.hkStop, 230)
     AddToggle(g, "hook", "hkSale", 214, 334, "Fish sold", Cfg.hkSale, 200)
-    AddToggle(g, "hook", "hkShot", 500, 334, "Attach screenshots (sale, report)", Cfg.hkShot, 230)
+    AddToggle(g, "hook", "hkShot", 500, 334, "Screenshots (sale, bait, report)", Cfg.hkShot, 230)
     AddToggle(g, "hook", "hkBait", 214, 368, "Bait purchased", Cfg.hkBait, 200)
     AddToggle(g, "hook", "hkErr", 500, 368, "Errors and safety stops", Cfg.hkErr, 230)
     AddToggle(g, "hook", "hkHourly", 214, 402, "Hourly report", Cfg.hkHourly, 120)

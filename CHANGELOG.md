@@ -1,6 +1,6 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.8 below).
+Current delivered file: `BloxFishing.ahk` (v1.9 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
 
 ---
@@ -108,6 +108,19 @@ Built from the screenshots you sent. Not yet tested in the game: the script was 
 - **Message queue:** messages are sent one every 2.2 s so Discord's rate limit is not hit. If the queue is full, the live "casting/hooked/buying/selling" messages are dropped first.
 - The window is a little taller (640) to fit the new switches.
 - Not tested in the game or on a real Discord channel.
+
+## v1.9: Income read fix, bait screenshot, live bait counter
+
+- **Income "unreadable" (fixed):**
+  - Cause: the $ was read while the Fisherman dialogue was still open, and the dialogue hides the bottom-left HUD. The counter also updates a moment after Confirm, and it was only read once.
+  - Now: the $ is read before opening the NPC (3 tries), then after the sale the macro leaves the dialogue if it is still open and polls the counter until it has changed and shows the same value twice. Gain = after - before.
+  - The region now skips the "$" sign, which OCR often misreads as a digit.
+  - The log shows `[money] before/after` and the raw OCR text when a read fails.
+  - The unreliable fallback (reading numbers from the sale text) is removed.
+  - The "Fish sold" message now shows `Balance: $before > $after` and attaches the HUD ($ + level) after the sale instead of the dialogue text.
+- **Bait purchase screenshot:** the Craft window is captured just before Craft is pressed (quantity and price visible) and attached to "Bait purchased", which also shows the inventory total. The `hkShot` switch is now labelled "Screenshots (sale, bait, report)". Region: `craftShot` in the code.
+- **"Bait in inventory now" is live:** every bait used or bought updates the field and the saved setting, so the next start resumes from the real count. Editing the field during a run corrects the tracked count.
+- Not tested in the game.
 
 ---
 
