@@ -1,6 +1,6 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.6 below).
+Current delivered file: `BloxFishing.ahk` (v1.8 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
 
 ---
@@ -51,7 +51,7 @@ Nothing is pending from the earlier "not delivered" list except the open points 
 
 - Label change only: "Bait per purchase (x10)" became "Bait per purchase".
   Enter the real number: 10 for 10 bait, 20 for 20 bait.
-- **Known bug in this version:** values from 1 to 9 are rounded up to 10, so a value of 2 buys 10 bait, not 20 (still open, see the end of this file).
+- **Known bug in this version:** values from 1 to 9 are rounded up to 10, so a value of 2 buys 10 bait, not 20 (fixed in v1.7).
 
 ---
 
@@ -89,6 +89,26 @@ Built from the screenshots you sent. Not yet tested in the game: the script was 
 - **Window:** the large titles, the sidebar name and the tile numbers were cut off because their text boxes were too short. They are taller now.
 - The version number shown in the window is now 1.6.0.
 
+## v1.7: Bait per purchase list, 100-bait cap
+
+- **Bait per purchase** is now a drop-down from 10 to 100 (steps of 10). The rounding bug (1 to 9 becoming 10) is gone because the field no longer takes free numbers.
+- **Inventory cap:** the inventory holds at most 100 bait, so the macro buys only what fits: `min(wanted, 100 - bait in stock)`. Example: 50 in stock and 100 wanted buys 50; 1 in stock and 100 wanted buys 90. If the inventory is already full it skips the purchase and says so in the log.
+- The tracked bait count is capped at 100 as well, and "Bait in inventory now" accepts 0 to 100.
+- This relies on the bait count: enter your real stock in "Bait in inventory now" (0 = not counted, then the cap cannot be applied before the first purchase).
+- Not tested in the game.
+
+## v1.8: Live webhook messages
+
+- **New "Live activity" group** on the Webhook page:
+  - **Buying bait / selling fish:** a message when the macro starts a purchase (type, quantity, cost) or a sale (fish in stock).
+  - **Casting and hooked:** a message for each cast (with the release percentage) and each bite. Off by default because it is chatty.
+  - **Fish caught + progress:** catch number, catches until the next sale, bait left, level, fish per hour, chests.
+  - **Catch screenshot:** attaches a screenshot of the Species/Weight card. The fast "flick" trick hides that card, so while this option is on the macro waits for the card instead, which makes each catch about 2 s slower. Off by default. The screenshot area (`catchShot` in the code) is a guess, check the first one.
+  - **Chest collected:** a message when the zone reaches a chest and holds it. Chests are also counted in the hourly report and the catch message.
+- **Message queue:** messages are sent one every 2.2 s so Discord's rate limit is not hit. If the queue is full, the live "casting/hooked/buying/selling" messages are dropped first.
+- The window is a little taller (640) to fit the new switches.
+- Not tested in the game or on a real Discord channel.
+
 ---
 
 ## Findings from your screenshots
@@ -99,7 +119,6 @@ Built from the screenshots you sent. Not yet tested in the game: the script was 
 
 ## Open points (to check in the game)
 
-- **Bait per purchase 1 to 9:** the minimum purchase is one pack of 10, so 1 to 9 still become 10. If you meant "2 = two packs (20 bait)", tell me and I will change the field to count packs.
 - **OCR:** money and level reading depend on Windows OCR reading the game font. If a sale says "unreadable", send me a screenshot of the bottom-left HUD.
 - **Webhook screenshots:** the attachments have not been seen arriving on a real Discord channel yet.
 - **Bait menu order:** I assumed Basic first, then the two baits of that sea in the order you listed. Override with `baitRow=` (1 to 3) in the `[shop]` section of `BloxFishing.ini`.

@@ -295,7 +295,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.7.0"
+APP_VERSION := "1.8.0"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
@@ -313,6 +313,7 @@ Regions := {
     menu:  [0.6700, 0.3600, 0.9500, 0.7800],   ; NPC button stack
     craft: [0.4020, 0.5769, 0.6020, 0.7162],   ; yellow Craft button
     learn: [0.6753, 0.6482, 0.8573, 0.7458],   ; recipe-note "Learn" button
+    catchShot: [0.1500, 0.1200, 0.8500, 0.9000],  ; where the Species/Weight card shows (catch screenshot)
     sale:  [0.2200, 0.6200, 0.7800, 0.9200],   ; strip below the centre where the sale text pops up
     money: [0.0030, 0.7000, 0.1450, 0.7620],   ; the $ counter (bottom-left HUD)
     level: [0.0030, 0.7620, 0.1200, 0.8060],   ; "Lv. 868" under the $ counter
@@ -378,6 +379,7 @@ Cfg := {
   , hkOn: false, hkUrl: "", hkName: "Blox Fishing Macro", hkMention: ""
   , hkStart: true, hkStop: true, hkSale: true, hkShot: true, hkBait: true
   , hkHourly: true, hkEveryMin: 60, hkErr: true
+  , hkBuy: true, hkCast: false, hkCatch: true, hkCatchShot: false, hkChest: true
 }
 
 ; Runtime state.
@@ -388,12 +390,12 @@ BotState := {
   , atNpc: true, bait: -1, sinceSell: 0, lastResponse: 0.0, witness: ""
   , flicked: false, lastEscaped: false, buyFailures: 0, lastBought: 0
   , meterFull: 0, biteInfo: "", zoomedAt: -1, biteMisses: 0
-  , stopReason: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false
+  , stopReason: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: []
 }
 Meter := {x: 0, top: 0, bot: 0}
 BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
            , biteTimeouts: 0, sales: 0, purchases: 0, baitBought: 0, spent: 0
-           , income: 0, unreadable: 0, levels: 0, started: 0.0, lastUp: 0.0}
+           , income: 0, unreadable: 0, levels: 0, chests: 0, started: 0.0, lastUp: 0.0}
 Hour := {started: 0.0}                                  ; counters since the last hourly report
 
 CurBait() {
@@ -524,7 +526,7 @@ Tally(field, n := 1) {
 
 ResetHour() {
     for k in ["casts", "catches", "escapes", "sales", "purchases", "baitBought", "spent"
-            , "income", "unreadable", "levels", "bites", "missedBar", "biteTimeouts"]
+            , "income", "unreadable", "levels", "chests", "bites", "missedBar", "biteTimeouts"]
         Hour.%k% := 0
     Hour.started := Now()
 }
@@ -2066,6 +2068,7 @@ BuyBaitRoute() {
         . " (" . packs . " pack" . (packs == 1 ? "" : "s") . ", $" . Fmt(cost)
         . (bait.item != "" ? " + " . packs . " " . bait.item : "") . ")")
 
+    HookBuying(bait, bought, cost)
     if !OpenNpcDialogue()
         return ShopFail("NPC dialogue never opened", "shop")
     if (Cfg.npc == "Angler") {
@@ -2131,6 +2134,7 @@ SellFish(stayAtNpc := false) {
         return false
     }
     LogMsg("[sell] selling the fish stock")
+    HookSelling(BotState.sinceSell)
     moneyBefore := Cfg.trackIncome ? ReadMoney() : -1
     if !OpenNpcDialogue()
         return ShopFail("NPC dialogue never opened", "sell")
@@ -2294,6 +2298,7 @@ DoCast() {
                                : " - never reached " . Round(thr * 100) . "%, released anyway"))
             Tally("casts")
             LogMsg("[cast] #" . BotStats.casts . (attempt == 1 ? "" : " (attempt " . attempt . ")"))
+            HookCast(Cfg.perfect ? Round(level * 100) : -1)
             Wait(Timing.castSettle)
             return true
         }
@@ -2325,6 +2330,7 @@ WaitForBite() {
                 BotStats.bites += 1
                 NoteResponse()
                 LogMsg("[bite] hooked")
+                HookHooked()
                 return true
             }
         } else {
@@ -2392,7 +2398,7 @@ Reel(spend := true) {
                 lostSince := tn
                 ; If the progress strip went too, the fight is over: flick NOW,
                 ; the catch card renders within a couple of frames.
-                if (!ProgressPresent(geo) && !flicked && Cfg.flick) {
+                if (!ProgressPresent(geo) && !flicked && UseFlick()) {
                     FlickRod()
                     flicked := true
                 }
@@ -2437,6 +2443,10 @@ Reel(spend := true) {
             reelCtl.Retarget()
             LogMsg(chestOn ? "[chest] collected, back to the fish"
                            : "[chest] could not reach it in time, back to the fish")
+            if chestOn {
+                Tally("chests")
+                HookChest()
+            }
             chestAt := -1.0
             chestOn := false
         } else if (Cfg.chest && st.cl >= 0 && chestDone.Length < Timing.chestMaxGrabs) {
@@ -2508,14 +2518,27 @@ Reel(spend := true) {
     return true
 }
 
+; The fast "flick" trick hides the Species/Weight card, so it is off while the
+; catch screenshot is wanted (the card has to be on screen to be photographed).
+CatchShotOn() {
+    return HookReady() && Cfg.hkCatch && Cfg.hkCatchShot
+}
+
+UseFlick() {
+    return Cfg.flick && !CatchShotOn()
+}
+
 DismissCatch() {
-    if Cfg.flick {
+    shot := ""
+    if UseFlick() {
         if !BotState.flicked
             FlickRod()
         BotState.flicked := false
     } else {
         ; Fallback: wait for the Species/Weight card, then click it away twice.
         Wait(Timing.popupDelay)
+        if (CatchShotOn() && !BotState.lastEscaped)
+            shot := CatchShot()
         Mouse.Tap()
         Wait(Timing.catchClickGap)
         Mouse.Tap()
@@ -2527,9 +2550,10 @@ DismissCatch() {
         BotState.sinceSell += 1
         NoteResponse()
         LogMsg("[catch] #" . BotStats.catches . " - recasting")
+        HookCatch(shot)
     }
     ClearRecipeNote()                                    ; the only popup that never fades
-    if !Cfg.flick
+    if !UseFlick()
         Wait(Timing.catchSettle)
 }
 
@@ -2701,6 +2725,7 @@ ResetStats() {
     BotStats.income := 0
     BotStats.unreadable := 0
     BotStats.levels := 0
+    BotStats.chests := 0
     BotStats.lastUp := 0.0
     BotStats.started := Now()
     ResetHour()
@@ -2773,6 +2798,11 @@ SETTINGS_SPEC := [
   , ["webhook", "hkHourly", "1", "b"]
   , ["webhook", "hkEveryMin", "60", "i"]
   , ["webhook", "hkErr", "1", "b"]
+  , ["webhook", "hkBuy", "1", "b"]
+  , ["webhook", "hkCast", "0", "b"]
+  , ["webhook", "hkCatch", "1", "b"]
+  , ["webhook", "hkCatchShot", "0", "b"]
+  , ["webhook", "hkChest", "1", "b"]
 ]
 
 LoadSettings() {
@@ -3105,7 +3135,29 @@ EmbedJson(title, desc, color, fields := "", imageName := "") {
 
 ; Fire-and-forget POST through curl.exe (ships with Windows 10 1803+). The
 ; optional PNG is attached as multipart. The HTTP status is logged ~5 s later.
-HookPost(embeds, filePath := "", content := "", label := "message", fname := "sale.png") {
+; Messages go through a queue (one every 2.2 s) so a busy macro never trips
+; Discord's rate limit. Low-priority live-activity messages are dropped when it is full.
+HookPost(embeds, filePath := "", content := "", label := "message", fname := "sale.png", lowPrio := false) {
+    if !HookUrlOk()
+        return false
+    q := BotState.hookQ
+    if (lowPrio && q.Length >= 4)
+        return false
+    if (q.Length >= 40)
+        q.RemoveAt(1)
+    q.Push([embeds, filePath, content, label, fname])
+    return true
+}
+
+HookPump() {
+    q := BotState.hookQ
+    if !q.Length
+        return
+    a := q.RemoveAt(1)
+    HookSend(a[1], a[2], a[3], a[4], a[5])
+}
+
+HookSend(embeds, filePath := "", content := "", label := "message", fname := "sale.png") {
     if !HookUrlOk()
         return false
     curl := A_WinDir . "\System32\curl.exe"
@@ -3225,6 +3277,63 @@ HookBait(bait, qty, cost) {
     HookPost(EmbedJson("Bait purchased", "The macro restocked its bait.", 0x60A5FA, f), , , "bait message")
 }
 
+; ---- live activity ---------------------------------------------------------
+HookBuying(bait, qty, cost) {
+    if !(HookReady() && Cfg.hkBuy)
+        return
+    HookPost(EmbedJson("Buying bait", "x" . qty . " " . bait.name . "  -  $" . Fmt(cost), 0x60A5FA)
+        , , , "buying", , true)
+}
+
+HookSelling(fishCount) {
+    if !(HookReady() && Cfg.hkBuy)
+        return
+    HookPost(EmbedJson("Selling fish", Fmt(fishCount) . " fish in stock", 0x34D399), , , "selling", , true)
+}
+
+HookCast(pct) {
+    if !(HookReady() && Cfg.hkCast)
+        return
+    HookPost(EmbedJson("Casting", "Cast #" . BotStats.casts . (pct >= 0 ? "  -  released at " . pct . "%" : "")
+        , 0x94A3B8), , , "cast", , true)
+}
+
+HookHooked() {
+    if !(HookReady() && Cfg.hkCast)
+        return
+    HookPost(EmbedJson("Hooked", "Bite #" . BotStats.bites . "  -  reeling now", 0xFBBF24), , , "hooked", , true)
+}
+
+CatchShot() {
+    r := SubRect(BotState.win, Regions.catchShot)
+    path := TMP_DIR . "\catch_" . FormatTime(, "yyyyMMdd_HHmmss") . ".png"
+    return PngSave(r.x, r.y, r.w, r.h, path) ? path : ""
+}
+
+; A fish was caught: progress (catches, sale countdown, bait, level) + optional screenshot.
+HookCatch(shot := "") {
+    if !(HookReady() && Cfg.hkCatch)
+        return
+    up := Max(1, Now() - BotStats.started)
+    f := [["Catch", "#" . Fmt(BotStats.catches)]]
+    if (Cfg.sellOn && Cfg.sellEvery > 0 && Cfg.npc != "Angler")
+        f.Push(["Until next sale", BotState.sinceSell . " / " . Cfg.sellEvery])
+    f.Push(["Bait left", BotState.bait >= 0 ? Fmt(BotState.bait) : "n/a"])
+    f.Push(["Level", BotState.levelLast >= 0 ? BotState.levelLast . (BotStats.levels > 0 ? "  (+" . BotStats.levels . ")" : "") : "n/a"])
+    f.Push(["Fish per hour", Round(BotStats.catches * 3600 / up, 1)])
+    f.Push(["Chests", BotStats.chests])
+    useShot := (shot != "" && FileExist(shot))
+    HookPost(EmbedJson("Fish caught", "", 0x34D399, f, useShot ? "catch.png" : ""), useShot ? shot : ""
+        , , "catch", "catch.png")
+}
+
+HookChest() {
+    if !(HookReady() && Cfg.hkChest)
+        return
+    f := [["Chests this session", BotStats.chests], ["Fish caught", Fmt(BotStats.catches)]]
+    HookPost(EmbedJson("Treasure chest collected", "A chest was grabbed during the reel minigame.", 0xFBBF24, f), , , "chest")
+}
+
 ; Every N minutes while running (default 60).
 HourlyTick() {
     if !(BotState.running && HookReady() && Cfg.hkHourly)
@@ -3245,6 +3354,7 @@ SendHourly(*) {
     f := [["Money generated", "$" . Fmt(h.income) . (h.unreadable ? "  (" . h.unreadable . " sale(s) unreadable)" : "")]
         , ["Bait bought", Fmt(h.baitBought) . "  ($" . Fmt(h.spent) . " spent)"]
         , ["Fish caught", Fmt(h.catches)]
+        , ["Chests", h.chests]
         , ["Net profit", (net < 0 ? "-$" : "$") . Fmt(Abs(net))]
         , ["Casts / escapes", h.casts . " / " . h.escapes]
         , ["Levels gained", "+" . h.levels . "   (" . LevelText() . " this session)"]
@@ -3702,32 +3812,36 @@ BuildGui(startPage := "dash") {
 
     ; ---- WEBHOOK -----------------------------------------------------------
     PageHeader(g, "hook", "Webhook", "Send progress, sales and an hourly report to a Discord channel.")
-    Section(g, "hook", 214, 100, "DISCORD")
-    AddToggle(g, "hook", "hkOn", 214, 126, "Enable webhook", Cfg.hkOn, 200)
-    Lbl(g, "hook", 214, 166, 300, "Webhook URL", th.muted)
-    AddEdit(g, "hook", "hkUrl", 214, 188, 400, Cfg.hkUrl, false, true)
-    Ui.btnShow := Btn(g, "hook", 622, 188, 56, 24, "Show", ToggleUrlMask, "ghost")
+    Section(g, "hook", 214, 98, "DISCORD")
+    AddToggle(g, "hook", "hkOn", 214, 122, "Enable webhook", Cfg.hkOn, 200)
+    Lbl(g, "hook", 214, 158, 300, "Webhook URL", th.muted)
+    AddEdit(g, "hook", "hkUrl", 214, 180, 400, Cfg.hkUrl, false, true)
+    Ui.btnShow := Btn(g, "hook", 622, 180, 56, 24, "Show", ToggleUrlMask, "ghost")
     Ui.btnShow.SetFont("s9 w600 c" . th.txt, "Segoe UI")
-    Btn(g, "hook", 686, 188, 118, 24, "Send test", HookTest, "primary")
-    Lbl(g, "hook", 214, 226, 180, "Display name", th.muted)
-    AddEdit(g, "hook", "hkName", 214, 248, 170, Cfg.hkName)
-    Lbl(g, "hook", 400, 226, 300, "Mention user ID on errors (optional)", th.muted)
-    AddEdit(g, "hook", "hkMention", 400, 248, 214, Cfg.hkMention)
-    Section(g, "hook", 214, 296, "WHAT TO SEND")
-    AddToggle(g, "hook", "hkStart", 214, 322, "Macro started", Cfg.hkStart, 200)
-    AddToggle(g, "hook", "hkStop", 500, 322, "Stopped + session summary", Cfg.hkStop, 230)
-    AddToggle(g, "hook", "hkSale", 214, 362, "Fish sold", Cfg.hkSale, 200)
-    AddToggle(g, "hook", "hkShot", 500, 362, "Attach the sale screenshot", Cfg.hkShot, 230)
-    AddToggle(g, "hook", "hkBait", 214, 402, "Bait purchased", Cfg.hkBait, 200)
-    AddToggle(g, "hook", "hkErr", 500, 402, "Errors and safety stops", Cfg.hkErr, 230)
-    AddToggle(g, "hook", "hkHourly", 214, 442, "Hourly report", Cfg.hkHourly, 120)
-    Lbl(g, "hook", 400, 446, 50, "every", th.muted)
-    AddEdit(g, "hook", "hkEveryMin", 440, 442, 56, Cfg.hkEveryMin, true)
-    Lbl(g, "hook", 504, 446, 40, "min", th.muted)
-    Btn(g, "hook", 600, 440, 204, 28, "Send report now", SendHourly, "ghost")
-    Lbl(g, "hook", 214, 490, 590, "The hourly report lists money generated, bait bought (and money spent), fish caught, net profit and"
-        . " fish per hour. The sale screenshot is the strip below the screen centre, taken right after selling.", th.muted, 9, 400, 44)
-    Ui.hookStatus := Lbl(g, "hook", 214, 548, 590, "", th.muted, 9)
+    Btn(g, "hook", 686, 180, 118, 24, "Send test", HookTest, "primary")
+    Lbl(g, "hook", 214, 214, 180, "Display name", th.muted)
+    AddEdit(g, "hook", "hkName", 214, 236, 170, Cfg.hkName)
+    Lbl(g, "hook", 400, 214, 300, "Mention user ID on errors (optional)", th.muted)
+    AddEdit(g, "hook", "hkMention", 400, 236, 214, Cfg.hkMention)
+    Section(g, "hook", 214, 276, "RESULTS")
+    AddToggle(g, "hook", "hkStart", 214, 300, "Macro started", Cfg.hkStart, 200)
+    AddToggle(g, "hook", "hkStop", 500, 300, "Stopped + session summary", Cfg.hkStop, 230)
+    AddToggle(g, "hook", "hkSale", 214, 334, "Fish sold", Cfg.hkSale, 200)
+    AddToggle(g, "hook", "hkShot", 500, 334, "Attach screenshots (sale, report)", Cfg.hkShot, 230)
+    AddToggle(g, "hook", "hkBait", 214, 368, "Bait purchased", Cfg.hkBait, 200)
+    AddToggle(g, "hook", "hkErr", 500, 368, "Errors and safety stops", Cfg.hkErr, 230)
+    AddToggle(g, "hook", "hkHourly", 214, 402, "Hourly report", Cfg.hkHourly, 120)
+    Lbl(g, "hook", 400, 405, 50, "every", th.muted)
+    AddEdit(g, "hook", "hkEveryMin", 440, 401, 56, Cfg.hkEveryMin, true)
+    Lbl(g, "hook", 504, 405, 40, "min", th.muted)
+    Btn(g, "hook", 600, 400, 204, 26, "Send report now", SendHourly, "ghost")
+    Section(g, "hook", 214, 444, "LIVE ACTIVITY  (what the macro is doing right now)")
+    AddToggle(g, "hook", "hkBuy", 214, 468, "Buying bait / selling fish", Cfg.hkBuy, 200)
+    AddToggle(g, "hook", "hkCast", 500, 468, "Casting and hooked", Cfg.hkCast, 230)
+    AddToggle(g, "hook", "hkCatch", 214, 502, "Fish caught + progress", Cfg.hkCatch, 200)
+    AddToggle(g, "hook", "hkCatchShot", 500, 502, "Catch screenshot (slower)", Cfg.hkCatchShot, 230)
+    AddToggle(g, "hook", "hkChest", 214, 536, "Chest collected", Cfg.hkChest, 200)
+    Ui.hookStatus := Lbl(g, "hook", 214, 578, 590, "", th.muted, 9)
 
     ; ---- APPEARANCE --------------------------------------------------------
     PageHeader(g, "look", "Appearance", "Pick a theme. It applies instantly and is remembered.")
@@ -3743,7 +3857,7 @@ BuildGui(startPage := "dash") {
     }
 
     ShowPage(startPage)
-    g.Show("w830 h620")
+    g.Show("w830 h640")
     if th.dark {
         try {
             b := Buffer(4, 0)
@@ -3780,5 +3894,6 @@ Hotkey("F4", (*) => ExitApp())
 Hotkey("F8", ToggleDebug)
 SetTimer(UpdateStats, 1000)
 SetTimer(HourlyTick, 15000)
+SetTimer(HookPump, 2200)
 LogMsg(APP_NAME . " ready. Stand at the " . Cfg.npc . " (Interact prompt visible), rod equipped, "
     . "Shift Lock OFF, then press F2.")
