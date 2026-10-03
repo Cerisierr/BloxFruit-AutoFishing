@@ -1,7 +1,19 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.16.2 below).
+Current delivered file: `BloxFishing.ahk` (v1.18.0 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
+
+---
+
+## v1.18.0: Bite detection rebuilt for RDP, image report card
+
+- **Why "hooked" was wrong (measured on your 1363x766 RDP screenshot):** the real "!" marker body is salmon, about (248,117,130). The old rule only matched the anti-aliased edge of the marker (114 of about 3,300 pixels), so detection depended on what was behind the marker and could fire on other pink/red shapes.
+- **Marker colour:** both the salmon body and the old pink edge are accepted (`IsBitePx`). On your two screenshots: the frame with "!" gives a 130x118 px blob, the frame without gives nothing.
+- **Baseline:** right before waiting for a bite, two frames 150 ms apart are compared; marker-coloured cells present in both are scenery (cape, bobber, rod glow, anything static) and are ignored for that cast. Log: `[bite] N marker-coloured cells already on screen - ignored`.
+- **False-hook evidence:** the frame that fired a bite is kept in memory; if the reel bar then never appears, it is saved as `%TEMP%\BloxFishing\bite_false_HHmmss.png` and the log prints the path (`possible FALSE HOOK`). The `[bite] hooked (...)` line now also shows the blob position.
+- **Screen capture:** `CAPTUREBLT` removed (plain `SRCCOPY`), because it makes the cursor flicker over RDP. `PngSave` already used plain `SRCCOPY`.
+- **Report card (new):** the hourly report and the stop summary now attach a StatMonitor-style PNG drawn with GDI+: money-earned chart, levels-gained chart, panels for the last period and the session (money gained, levels gained, time), plus fish caught, fish per hour, level and bait spent. History is sampled every 20 s and at each sale. If the image cannot be drawn, the old text embed is sent instead (`[card]` line in the log).
+- Not tested in the game or on Discord. If hooks are still wrong, send the `[bite]` log lines and the `bite_false_*.png` file.
 
 ---
 
@@ -155,6 +167,25 @@ Built from the screenshots you sent. Not yet tested in the game: the script was 
   - The profile is the one chosen in the window (Auto = nearest to your screen size). Pixels are offsets from the top-left of the game area.
 - **Click diagnostics:** every click logs `[click] plus target X,Y cursor X,Y` and flags `CURSOR MISSED THE TARGET` if Windows did not move the mouse there. The cursor is first jumped to the target, then the usual nudged move and click follow.
 - The Close click used by the error recovery uses the same table.
+- Not tested in the game.
+
+---
+
+## v1.17.2: RDP 1366x768 fixes (cast meter, bait line, false hooks)
+
+- **Cast meter:** the orange fill is lower on a 1366x768 screen (about 0.64 to 0.92 of the game height). The read zone stopped at 0.82, so the macro did not see the top of the charge and released late. The zone now covers down to 0.96.
+- **Bait line:** moved up to about 0.81 to 0.86 of the game height, where the RDP shows `Selected Bait: ... xN`.
+- **False "hooked":** the dark red cape of the character passed the pink test. The bite marker now also needs blue at least 40 above green, which rejects the cape.
+- Checked against your screenshot (1362x798 window, title bar removed). The real "!" marker was not in that screenshot, so it is still untested.
+- Not tested in the game.
+
+---
+
+## v1.17.1: 1366x768 profile (RDP) and better OCR
+
+- **1366x768 profile added** (also in the Resolution dropdown). Before, that screen was matched to the 1920x1080 profile, so the fixed click points of the shop/craft window landed in the wrong place.
+- **The 1366x768 click points are not measured yet.** They are the 1920x1080 values scaled by 0.711. If the shop or craft clicks miss, send me a screenshot of the craft window at 1366x768 and I will measure the points.
+- **OCR upscale x3** before reading text (bait line, level). The OCR helper is now always rewritten, so the new version is used even if an old copy exists.
 - Not tested in the game.
 
 ---

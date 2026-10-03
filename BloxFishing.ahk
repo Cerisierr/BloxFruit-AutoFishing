@@ -132,7 +132,7 @@ class ScreenGrab {
     Capture(x, y) {
         return DllCall("BitBlt", "ptr", this.hdcMem, "int", 0, "int", 0
             , "int", this.w, "int", this.h, "ptr", this.hdcScreen
-            , "int", x, "int", y, "uint", 0x40CC0020)   ; SRCCOPY | CAPTUREBLT
+            , "int", x, "int", y, "uint", 0x00CC0020)   ; SRCCOPY (no CAPTUREBLT: it makes the cursor flicker over RDP)
     }
 
     __Delete() {
@@ -296,23 +296,23 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.16.2"
+APP_VERSION := "1.18.0"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
 
 ; Supported screen resolutions (profile dropdown).
-RES_PROFILES := Map("1920x1080", [1920, 1080], "2560x1440", [2560, 1440])
-RES_ORDER    := ["1920x1080", "2560x1440"]
+RES_PROFILES := Map("1920x1080", [1920, 1080], "2560x1440", [2560, 1440], "1366x768", [1366, 768])
+RES_ORDER    := ["1920x1080", "2560x1440", "1366x768"]
 
 ; Regions as fractions of the game window: [left, top, right, bottom].
 Regions := {
     bar:   [0.2138, 0.7184, 0.8502, 0.8181],   ; reel bar search band
-    baitLine: [0.4200, 0.8700, 0.5800, 0.9200],  ; "Selected Bait: Kelp Bait x80" under the NPC label
+    baitLine: [0.4200, 0.8050, 0.5800, 0.8600],  ; "Selected Bait: Kelp Bait x80" under the NPC label
     health: [0.0100, 0.8150, 0.2000, 0.8750],  ; HP bar (bottom-left): green fill, empty when dead
     bite:  [0.2800, 0.1600, 0.7200, 0.6000],   ; "!" marker area (excludes the top-right player list)
-    meter: [0.2500, 0.3000, 0.5500, 0.8200],   ; cast charge meter: usual spot beside the character
-    meterWide: [0.1800, 0.2200, 0.8200, 0.8800], ; fallback if the camera was moved
+    meter: [0.2800, 0.6000, 0.3800, 0.9600],   ; cast charge meter: tube sits low on 1366x768 RDP (0.64-0.92)
+    meterWide: [0.1800, 0.2200, 0.8200, 0.9600], ; fallback if the camera was moved
     menu:  [0.6700, 0.3600, 0.9500, 0.7800],   ; NPC button stack
     craft: [0.4020, 0.5769, 0.6020, 0.7162],   ; yellow Craft button
     learn: [0.6753, 0.6482, 0.8573, 0.7458],   ; recipe-note "Learn" button
@@ -396,12 +396,15 @@ BotState := {
   , flicked: false, lastEscaped: false, buyFailures: 0, lastBought: 0
   , meterFull: 0, biteInfo: "", zoomedAt: -1, biteMisses: 0
   , npcHits: 0, hpNext: 0.0, hpLostSince: 0.0, hpDead: false, paused: false, stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: []
+  , biteBase: 0, biteBaseN: 0, biteFrame: 0, biteFrameW: 0, biteFrameH: 0
 }
 Meter := {x: 0, top: 0, bot: 0}
 BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
            , biteTimeouts: 0, sales: 0, purchases: 0, baitBought: 0, spent: 0
            , income: 0, unreadable: 0, levels: 0, chests: 0, started: 0.0, lastUp: 0.0}
 Hour := {started: 0.0}                                  ; counters since the last hourly report
+HIST_MAX := 1200
+Hist := []                                              ; report-card samples: [elapsed s, income, levels, catches]
 
 CurBait() {
     for b in BAITS {
@@ -1055,9 +1058,27 @@ ProgressPresent(geo) {
 ; Bite marker: a magenta-pink ring + "!" (hue 316..358 deg, S>=45/255, V>=110).
 ; Same method as the Python build: colour mask -> connected blobs (small gaps
 ; closed) -> shape gates on each blob, so stray pink pixels can't spoil it.
-BiteNow() {
-    win := BotState.win
-    r := SubRect(win, Regions.bite)
+; The "!" marker. Measured on a real RDP frame: its body is SALMON (248,117,130);
+; only the anti-aliased edge blends towards pink/purple (170,102,143). The old
+; rule matched only that edge (114 of ~3,300 marker pixels), so detection depended
+; on what was behind the marker. Both looks are accepted now.
+IsBitePx(rr, gg, bb) {
+    if (rr < 110)
+        return false
+    if (rr >= 200 && gg >= 60 && gg <= 165 && bb >= 70 && bb <= 175 && rr - gg >= 70 && Abs(bb - gg) <= 45)
+        return true                                        ; salmon body
+    if (bb > gg && rr >= bb) {                             ; pink edge (previous rule)
+        d := rr - gg
+        e := bb - gg
+        return (d * 17 >= 3 * rr && e * 100 <= 73 * d && e * 30 >= d && e >= 40)
+    }
+    return false
+}
+
+; Scan the bite zone once. `ign` (or 0) is a mask of cells that were already
+; marker-coloured BEFORE any bite (cape, bobber, rod glow...): they are skipped.
+BiteScan(ign := 0) {
+    r := SubRect(BotState.win, Regions.bite)
     gr := ScreenGrab.Get(r.w, r.h)
     gr.Capture(r.x, r.y)
     bits := gr.bits
@@ -1067,27 +1088,20 @@ BiteNow() {
     gh := (h + st - 1) // st
     mask := Buffer(gw * gh, 0)
     cxs := [], cys := []
-
     gy := 0
     y := 0
     while (y < h) {
-        base := y * w * 4
+        row := y * w * 4
         gx := 0
         x := 0
         while (x < w) {
-            v := NumGet(bits, base + x * 4, "UInt")
-            rr := (v >> 16) & 255
-            if (rr >= 110) {
-                gg := (v >> 8) & 255
-                bb := v & 255
-                if (bb > gg && rr >= bb) {
-                    d := rr - gg
-                    e := bb - gg
-                    if (d * 17 >= 3 * rr && e * 100 <= 73 * d && e * 30 >= d) {
-                        NumPut("UChar", 1, mask, gy * gw + gx)
-                        cxs.Push(gx)
-                        cys.Push(gy)
-                    }
+            v := NumGet(bits, row + x * 4, "UInt")
+            if IsBitePx((v >> 16) & 255, (v >> 8) & 255, v & 255) {
+                o := gy * gw + gx
+                if !(ign && NumGet(ign, o, "UChar")) {
+                    NumPut("UChar", 1, mask, o)
+                    cxs.Push(gx)
+                    cys.Push(gy)
                 }
             }
             x += st
@@ -1096,8 +1110,77 @@ BiteNow() {
         y += st
         gy++
     }
-    n := cxs.Length
-    BotState.biteInfo := "pink cells=" . n
+    return {mask: mask, gw: gw, gh: gh, cxs: cxs, cys: cys, w: w, h: h, st: st, bits: bits}
+}
+
+; Called once per cast, right before waiting for the bite. Two frames 150 ms apart:
+; a cell that is marker-coloured in BOTH is scenery, not a bite. Grown by one cell
+; so a 1-px shake of the camera does not matter.
+BiteBaseline() {
+    BotState.biteBase := 0
+    BotState.biteBaseN := 0
+    a := BiteScan()
+    Sleep(150)
+    b := BiteScan()
+    if (a.gw != b.gw || a.gh != b.gh)
+        return
+    gw := b.gw, gh := b.gh
+    base := Buffer(gw * gh, 0)
+    n := 0
+    Loop b.cxs.Length {
+        i := A_Index
+        x := b.cxs[i], y := b.cys[i]
+        if !NumGet(a.mask, y * gw + x, "UChar")
+            continue
+        n++
+        ny := Max(0, y - 1)
+        while (ny <= Min(gh - 1, y + 1)) {
+            nx := Max(0, x - 1)
+            while (nx <= Min(gw - 1, x + 1)) {
+                NumPut("UChar", 1, base, ny * gw + nx)
+                nx++
+            }
+            ny++
+        }
+    }
+    if n {
+        BotState.biteBase := base
+        BotState.biteBaseN := n
+    }
+}
+
+; Keep the frame that fired a bite, so a false hook can be inspected afterwards.
+BiteKeep(s) {
+    sz := s.w * s.h * 4
+    if (!IsObject(BotState.biteFrame) || BotState.biteFrame.Size != sz)
+        BotState.biteFrame := Buffer(sz)
+    DllCall("RtlMoveMemory", "ptr", BotState.biteFrame, "ptr", s.bits, "uptr", sz)
+    BotState.biteFrameW := s.w
+    BotState.biteFrameH := s.h
+}
+
+; Write the kept frame to a PNG. Returns the path or "".
+BiteDumpFrame() {
+    f := BotState.biteFrame
+    if (!IsObject(f) || !Gp.Start())
+        return ""
+    bmp := 0
+    DllCall("gdiplus\GdipCreateBitmapFromScan0", "int", BotState.biteFrameW, "int", BotState.biteFrameH
+        , "int", BotState.biteFrameW * 4, "int", 0x22009, "ptr", f, "ptr*", &bmp)
+    if !bmp
+        return ""
+    path := TMP_DIR . "\bite_false_" . FormatTime(, "HHmmss") . ".png"
+    ok := (DllCall("gdiplus\GdipSaveImageToFile", "ptr", bmp, "wstr", path, "ptr", Gp.clsid, "ptr", 0) == 0)
+    DllCall("gdiplus\GdipDisposeImage", "ptr", bmp)
+    return (ok && FileExist(path)) ? path : ""
+}
+
+BiteNow() {
+    s := BiteScan(BotState.biteBase)
+    n := s.cxs.Length
+    gw := s.gw, gh := s.gh, mask := s.mask, cxs := s.cxs, cys := s.cys
+    w := s.w, h := s.h, st := s.st
+    BotState.biteInfo := "marker cells=" . n . (BotState.biteBaseN ? " (" . BotState.biteBaseN . " static ignored)" : "")
     if (n < 4 || n > 12000)
         return false
 
@@ -1152,10 +1235,11 @@ BiteNow() {
             continue
         if (area / (bw * bh) < 0.10)
             continue
-        BotState.biteInfo := "marker " . bw . "x" . bh . " px"
+        BotState.biteInfo := "marker " . bw . "x" . bh . " px at " . (minX * st) . "," . (minY * st)
+        BiteKeep(s)
         return true
     }
-    BotState.biteInfo := "pink cells=" . n . " largest blob=" . bestDim . " px (need " . Round(minDim) . ")"
+    BotState.biteInfo := "marker cells=" . n . " largest blob=" . bestDim . " px (need " . Round(minDim) . ")"
     return false
 }
 
@@ -1702,6 +1786,8 @@ PanelSig(panels) {
 CRAFT_PX := Map(
     "2560x1440", {plus: [1642, 738], craft: [1280, 917], close: [1702, 386]}
   , "1920x1080", {plus: [1232, 554], craft: [960, 688],  close: [1277, 290]}
+  ; 1366x768: NOT measured - scaled from 1920x1080 by 0.711. Check with a screenshot.
+  , "1366x768", {plus: [877, 394], craft: [683, 489], close: [909, 206]}
 )
 
 ; Absolute screen position of a Craft-window pixel for the active profile.
@@ -2501,6 +2587,9 @@ DoCast() {
 }
 
 WaitForBite() {
+    BiteBaseline()
+    if BotState.biteBaseN
+        LogMsg("[bite] " . BotState.biteBaseN . " marker-coloured cells already on screen - ignored")
     minHold := Cfg.fastBite ? 0.04 : 0.15      ; le "!" doit rester visible au moins ce temps (s)
     deadline := Now() + Timing.maxWaitBite
     firstSeen := 0
@@ -2541,6 +2630,9 @@ Reel(spend := true) {
     if !geo {
         BotStats.missedBar += 1
         LogMsg("[reel] bar never appeared")
+        p := BiteDumpFrame()
+        if (p != "")
+            LogMsg("[bite] possible FALSE HOOK - frame that fired it: " . p)
         return false
     }
     if (spend && BotState.bait > 0) {                    ; bait is only used up once the minigame really starts
@@ -2970,6 +3062,8 @@ ResetStats() {
     BotStats.chests := 0
     BotStats.lastUp := 0.0
     BotStats.started := Now()
+    Hist.Length := 0
+    Hist.Push([0, 0, 0, 0])
     ResetHour()
 }
 
@@ -3233,6 +3327,15 @@ OcrScriptWrite(path) {
       $null = [Windows.Media.Ocr.OcrResult, Windows.Foundation, ContentType = WindowsRuntime]
       $asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -like 'IAsyncOperation*' })[0]
       function Await($op, $type) { $t = $asTask.MakeGenericMethod($type).Invoke($null, @($op)); $null = $t.Wait(-1); $t.Result }
+      Add-Type -AssemblyName System.Drawing
+      $src = [System.Drawing.Bitmap]::FromFile($ImgPath)
+      $big = New-Object System.Drawing.Bitmap ([int]($src.Width * 3)), ([int]($src.Height * 3))
+      $g = [System.Drawing.Graphics]::FromImage($big)
+      $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+      $g.DrawImage($src, 0, 0, $big.Width, $big.Height)
+      $g.Dispose(); $src.Dispose()
+      $ImgPath = $ImgPath + '.x3.png'
+      $big.Save($ImgPath, [System.Drawing.Imaging.ImageFormat]::Png); $big.Dispose()
       $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($ImgPath)) ([Windows.Storage.StorageFile])
       $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
       $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
@@ -3256,8 +3359,7 @@ OcrFile(png) {
     ps := TMP_DIR . "\ocr.ps1"
     out := TMP_DIR . "\ocr_out.txt"
     try FileDelete(out)
-    if !FileExist(ps)
-        OcrScriptWrite(ps)
+    OcrScriptWrite(ps)
     try {
         RunWait('powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' . ps
             . '" "' . png . '" "' . out . '"', , "Hide")
@@ -3541,15 +3643,20 @@ HookStopMsg() {
         , ["Net profit", (net < 0 ? "-$" : "$") . Fmt(Abs(net))]
         , ["Casts / escapes", BotStats.casts . " / " . BotStats.escapes]
         , ["Levels", LevelText()]]
+    card := ReportCard("stop")
+    useCard := (card != "")
     if (reason != "") {
         mention := (Cfg.hkMention != "") ? "<@" . Cfg.hkMention . ">" : ""
-        HookPost(EmbedJson("Macro stopped - needs attention", reason, 0xF87171, f), , mention, "stop message")
+        HookPost(EmbedJson("Macro stopped - needs attention", reason, 0xF87171, useCard ? "" : f
+            , useCard ? "report.png" : ""), useCard ? card : "", mention, "stop message", "report.png")
     } else {
-        HookPost(EmbedJson("Macro stopped", "Stopped manually. Session summary:", 0xFBBF24, f), , , "stop message")
+        HookPost(EmbedJson("Macro stopped", "Stopped manually. Session summary:", 0xFBBF24, useCard ? "" : f
+            , useCard ? "report.png" : ""), useCard ? card : "", , "stop message", "report.png")
     }
 }
 
 HookSale(gained, fishCount, shot, before := -1, after := -1) {
+    HistPush()
     if !(HookReady() && Cfg.hkSale)
         return
     f := [["Fish sold", Fmt(fishCount)]
@@ -3659,6 +3766,16 @@ SendHourly(*) {
         , ["Fish per hour", Round(h.catches * 60 / mins, 1)]
         , ["Session total", "$" . Fmt(BotStats.income) . " earned  |  " . Fmt(BotStats.catches)
             . " fish  |  " . FmtDur(Now() - BotStats.started) . " running", false]]
+    card := ReportCard("hour")
+    if (card != "") {
+        desc := "Last " . Round(mins) . " min  |  +$" . Fmt(h.income) . "  |  " . LvlGain(h.levels)
+            . " levels  |  " . Fmt(h.catches) . " fish"
+        HookPost(EmbedJson("Hourly Report", desc, 0x6C8CFF, "", "report.png"), card, , "hourly report"
+            , "report.png", false, HourlyUrl())
+        LogMsg("[webhook] hourly report sent (card)")
+        ResetHour()
+        return
+    }
     shot := ""
     if (Cfg.hkShot && BotState.running) {                ; the $ + level block, bottom-left
         r := SubRect(BotState.win, Regions.hud)
@@ -3686,6 +3803,312 @@ HookTest(*) {
         HookPost(EmbedJson("Hourly channel connected", "Hourly reports will be posted here.", 0x6C8CFF, f)
             , , , "hourly test", , false, Cfg.hkUrlHourly)
 }
+
+; ============================================================================
+;  REPORT CARD  (StatMonitor-style PNG drawn with GDI+, attached to the webhook)
+;  Shows only: money gained, levels gained, session time (+ a few small stats).
+; ============================================================================
+class Gp {
+    static token := 0
+    static clsid := 0
+    static fonts := Map()
+
+    static Start() {
+        if this.token
+            return true
+        si := Buffer(24, 0)
+        NumPut("UInt", 1, si, 0)
+        tk := 0
+        if (DllCall("gdiplus\GdiplusStartup", "ptr*", &tk, "ptr", si, "ptr", 0) != 0)
+            return false
+        this.token := tk
+        this.clsid := Buffer(16, 0)
+        DllCall("ole32\CLSIDFromString", "wstr", "{557CF406-1A04-11D3-9A73-0000F81EF32E}", "ptr", this.clsid)
+        return true
+    }
+
+    static Canvas(w, h, bg) {
+        bmp := 0
+        g := 0
+        DllCall("gdiplus\GdipCreateBitmapFromScan0", "int", w, "int", h, "int", 0, "int", 0x26200A, "ptr", 0, "ptr*", &bmp)
+        DllCall("gdiplus\GdipGetImageGraphicsContext", "ptr", bmp, "ptr*", &g)
+        DllCall("gdiplus\GdipSetSmoothingMode", "ptr", g, "int", 4)
+        DllCall("gdiplus\GdipSetTextRenderingHint", "ptr", g, "int", 4)
+        DllCall("gdiplus\GdipGraphicsClear", "ptr", g, "uint", bg)
+        return {bmp: bmp, g: g, w: w, h: h}
+    }
+
+    static Brush(argb) {
+        b := 0
+        DllCall("gdiplus\GdipCreateSolidFill", "uint", argb, "ptr*", &b)
+        return b
+    }
+
+    static RoundRect(c, x, y, w, h, r, argb) {
+        path := 0
+        d := r * 2
+        DllCall("gdiplus\GdipCreatePath", "int", 0, "ptr*", &path)
+        DllCall("gdiplus\GdipAddPathArc", "ptr", path, "float", x, "float", y, "float", d, "float", d, "float", 180, "float", 90)
+        DllCall("gdiplus\GdipAddPathArc", "ptr", path, "float", x + w - d, "float", y, "float", d, "float", d, "float", 270, "float", 90)
+        DllCall("gdiplus\GdipAddPathArc", "ptr", path, "float", x + w - d, "float", y + h - d, "float", d, "float", d, "float", 0, "float", 90)
+        DllCall("gdiplus\GdipAddPathArc", "ptr", path, "float", x, "float", y + h - d, "float", d, "float", d, "float", 90, "float", 90)
+        DllCall("gdiplus\GdipClosePathFigure", "ptr", path)
+        br := this.Brush(argb)
+        DllCall("gdiplus\GdipFillPath", "ptr", c.g, "ptr", br, "ptr", path)
+        DllCall("gdiplus\GdipDeleteBrush", "ptr", br)
+        DllCall("gdiplus\GdipDeletePath", "ptr", path)
+    }
+
+    ; pts = [x1, y1, x2, y2, ...]
+    static Pts(pts) {
+        b := Buffer(pts.Length * 4, 0)
+        for i, v in pts
+            NumPut("float", v, b, (i - 1) * 4)
+        return b
+    }
+
+    static Line(c, pts, argb, width) {
+        if (pts.Length < 4)
+            return
+        pen := 0
+        DllCall("gdiplus\GdipCreatePen1", "uint", argb, "float", width, "int", 2, "ptr*", &pen)
+        DllCall("gdiplus\GdipSetPenLineJoin", "ptr", pen, "int", 2)
+        b := this.Pts(pts)
+        DllCall("gdiplus\GdipDrawLines", "ptr", c.g, "ptr", pen, "ptr", b, "int", pts.Length // 2)
+        DllCall("gdiplus\GdipDeletePen", "ptr", pen)
+    }
+
+    static Poly(c, pts, argb) {
+        if (pts.Length < 6)
+            return
+        br := this.Brush(argb)
+        b := this.Pts(pts)
+        DllCall("gdiplus\GdipFillPolygon", "ptr", c.g, "ptr", br, "ptr", b, "int", pts.Length // 2, "int", 0)
+        DllCall("gdiplus\GdipDeleteBrush", "ptr", br)
+    }
+
+    static Font(size, bold) {
+        key := size . (bold ? "b" : "r")
+        if this.fonts.Has(key)
+            return this.fonts[key]
+        fam := 0
+        font := 0
+        if (DllCall("gdiplus\GdipCreateFontFamilyFromName", "wstr", "Segoe UI", "ptr", 0, "ptr*", &fam) != 0)
+            DllCall("gdiplus\GdipCreateFontFamilyFromName", "wstr", "Arial", "ptr", 0, "ptr*", &fam)
+        DllCall("gdiplus\GdipCreateFont", "ptr", fam, "float", size, "int", bold ? 1 : 0, "int", 2, "ptr*", &font)
+        this.fonts[key] := font
+        return font
+    }
+
+    ; align / valign: 0 = near, 1 = centre, 2 = far
+    static Text(c, txt, x, y, w, h, size, argb, bold := false, align := 0, valign := 1) {
+        font := this.Font(size, bold)
+        fmt := 0
+        DllCall("gdiplus\GdipCreateStringFormat", "int", 0x1000, "int", 0, "ptr*", &fmt)     ; NoWrap
+        DllCall("gdiplus\GdipSetStringFormatAlign", "ptr", fmt, "int", align)
+        DllCall("gdiplus\GdipSetStringFormatLineAlignment", "ptr", fmt, "int", valign)
+        rc := Buffer(16, 0)
+        NumPut("float", x, "float", y, "float", w, "float", h, rc)
+        br := this.Brush(argb)
+        DllCall("gdiplus\GdipDrawString", "ptr", c.g, "wstr", String(txt), "int", -1, "ptr", font
+            , "ptr", rc, "ptr", fmt, "ptr", br)
+        DllCall("gdiplus\GdipDeleteBrush", "ptr", br)
+        DllCall("gdiplus\GdipDeleteStringFormat", "ptr", fmt)
+    }
+
+    static Save(c, path) {
+        ok := (DllCall("gdiplus\GdipSaveImageToFile", "ptr", c.bmp, "wstr", path, "ptr", this.clsid, "ptr", 0) == 0)
+        DllCall("gdiplus\GdipDeleteGraphics", "ptr", c.g)
+        DllCall("gdiplus\GdipDisposeImage", "ptr", c.bmp)
+        return (ok && FileExist(path)) ? true : false
+    }
+}
+
+HistPush(*) {
+    if !BotState.running
+        return
+    Hist.Push([Now() - BotStats.started, BotStats.income, BotStats.levels, BotStats.catches])
+    if (Hist.Length > HIST_MAX) {                        ; thin out: keep every second sample
+        keep := []
+        for i, smp in Hist {
+            if (Mod(i, 2) == 1 || i == Hist.Length)
+                keep.Push(smp)
+        }
+        Hist.Length := 0
+        for smp in keep
+            Hist.Push(smp)
+    }
+}
+
+LvlGain(n) {
+    return (Cfg.trackLevel && BotState.levelStart >= 0) ? "+" . n : "n/a"
+}
+
+Trim0(x) {
+    s := Format("{:.2f}", x)
+    if InStr(s, ".")
+        s := RTrim(RTrim(s, "0"), ".")
+    return s
+}
+
+ShortNum(v, money := true) {
+    a := Abs(v)
+    pre := money ? "$" : ""
+    if (a >= 1e12)
+        return pre . Trim0(v / 1e12) . "T"
+    if (a >= 1e9)
+        return pre . Trim0(v / 1e9) . "B"
+    if (a >= 1e6)
+        return pre . Trim0(v / 1e6) . "M"
+    if (a >= 1e3)
+        return pre . Trim0(v / 1e3) . "K"
+    return pre . Trim0(v)
+}
+
+NiceMax(v) {
+    if (v <= 0)
+        return 4
+    p := 10 ** Floor(Log(v))
+    m := v / p
+    for n in [1, 1.2, 1.6, 2, 2.4, 3, 4, 5, 6, 8, 10] {
+        if (m <= n)
+            return n * p
+    }
+    return 10 * p
+}
+
+; One area chart panel. series = [[elapsed s, value], ...], t0 = start timestamp.
+CardChart(c, x, y, w, h, title, series, tMax, color, t0, money, nowText) {
+    Gp.RoundRect(c, x, y, w, h, 14, 0xFF1E1E22)
+    Gp.Text(c, title, x, y + 8, w, 28, 17, 0xFFEDEDED, true, 1, 1)
+    Gp.Text(c, nowText, x, y + 10, w - 18, 26, 14, color, true, 2, 1)
+    px := x + 70
+    py := y + 48
+    pw := w - 70 - 20
+    ph := h - 48 - 36
+    tMax := Max(60, tMax)
+    vmax := 0
+    for smp in series
+        vmax := Max(vmax, smp[2])
+    vmax := money ? NiceMax(vmax) : Max(4, Ceil(vmax / 4) * 4)
+
+    Loop 5 {
+        i := A_Index - 1
+        gy := py + ph - ph * i / 4
+        Gp.Line(c, [px, gy, px + pw, gy], 0xFF35353B, 1)
+        Gp.Text(c, ShortNum(vmax * i / 4, money), x + 4, gy - 10, 60, 20, 11, 0xFF9A9AA4, false, 2, 1)
+    }
+    Loop 5 {
+        i := A_Index - 1
+        tx := px + pw * i / 4
+        lbl := FormatTime(DateAdd(t0, Round(tMax * i / 4), "Seconds"), "HH:mm")
+        Gp.Text(c, lbl, tx - 30, py + ph + 8, 60, 20, 11, 0xFF9A9AA4, false, 1, 1)
+    }
+
+    line := []
+    for smp in series {
+        line.Push(px + pw * Min(1, smp[1] / tMax))
+        line.Push(py + ph - ph * Min(1, smp[2] / vmax))
+    }
+    if (line.Length >= 4) {
+        poly := [line[1], py + ph]
+        for v in line
+            poly.Push(v)
+        poly.Push(line[line.Length - 1])
+        poly.Push(py + ph)
+        Gp.Poly(c, poly, (0x55 << 24) | (color & 0xFFFFFF))
+        Gp.Line(c, line, color, 2.5)
+    }
+}
+
+; Stat panel: title + rows of [label, value, colour].
+CardPanel(c, x, y, w, h, title, rows) {
+    Gp.RoundRect(c, x, y, w, h, 14, 0xFF1E1E22)
+    Gp.Text(c, title, x, y + 8, w, 28, 15, 0xFFEDEDED, true, 1, 1)
+    ry := y + 42
+    for r in rows {
+        Gp.Text(c, r[1], x + 18, ry, w // 2, 36, 14, 0xFF9A9AA4, false, 0, 1)
+        Gp.Text(c, r[2], x + w // 2 - 10, ry, w // 2 - 8, 36, 20, r[3], true, 2, 1)
+        ry += 38
+    }
+}
+
+; kind = "hour" (periodic report) or "stop" (final summary). Returns a PNG path or "".
+ReportCard(kind) {
+    try {
+        return ReportCardDraw(kind)
+    } catch as err {
+        LogMsg("[card] could not draw the report image: " . err.Message)
+        return ""
+    }
+}
+
+ReportCardDraw(kind) {
+    if !Gp.Start()
+        return ""
+    stopKind := (kind == "stop")
+    up := stopKind ? Max(1, BotStats.lastUp) : Max(1, Now() - BotStats.started)
+    hsec := Max(3, Now() - Hour.started)
+    t0 := DateAdd(A_Now, -Round(up), "Seconds")
+
+    money := []
+    lvls := []
+    for smp in Hist {
+        if (smp[1] > up)
+            continue
+        money.Push([smp[1], smp[2]])
+        lvls.Push([smp[1], smp[3]])
+    }
+    money.Push([up, BotStats.income])
+    lvls.Push([up, BotStats.levels])
+
+    green := 0xFF4ADE80
+    amber := 0xFFFBBF24
+    white := 0xFFEDEDED
+    blue := 0xFF60A5FA
+
+    c := Gp.Canvas(1000, 560, 0xFF121214)
+    CardChart(c, 24, 24, 632, 276, "MONEY EARNED", money, up, green, t0, true, "$" . Fmt(BotStats.income))
+    CardChart(c, 24, 312, 632, 224, "LEVELS GAINED", lvls, up, amber, t0, false, LvlGain(BotStats.levels))
+
+    X := 680
+    W := 296
+    hourTitle := "LAST " . ((hsec >= 3540 && hsec <= 3660) ? "HOUR" : StrUpper(FmtDur(hsec)))
+    sessRows := [["Money gained", "$" . Fmt(BotStats.income), green]
+        , ["Levels gained", LvlGain(BotStats.levels), amber]
+        , ["Session time", FmtDur(up), white]]
+    hourRows := [["Money gained", "$" . Fmt(Hour.income), green]
+        , ["Levels gained", LvlGain(Hour.levels), amber]
+        , ["Time", FmtDur(hsec), white]]
+    if stopKind {
+        CardPanel(c, X, 24, W, 168, "SESSION", sessRows)
+        CardPanel(c, X, 204, W, 168, "SINCE LAST REPORT", hourRows)
+    } else {
+        CardPanel(c, X, 24, W, 168, hourTitle, hourRows)
+        CardPanel(c, X, 204, W, 168, "SESSION", sessRows)
+    }
+
+    Gp.RoundRect(c, X, 384, W, 92, 14, 0xFF1E1E22)
+    cells := [["Fish caught", Fmt(BotStats.catches)]
+        , ["Fish per hour", Round(BotStats.catches * 3600 / up, 1)]
+        , ["Level now", BotState.levelLast >= 0 ? BotState.levelLast : "n/a"]
+        , ["Bait spent", "$" . Fmt(BotStats.spent)]]
+    for i, cell in cells {
+        cx := X + 18 + Mod(i - 1, 2) * 138
+        cy := 394 + ((i - 1) // 2) * 40
+        Gp.Text(c, cell[1], cx, cy, 130, 16, 11, 0xFF9A9AA4, false, 0, 1)
+        Gp.Text(c, cell[2], cx, cy + 15, 130, 24, 15, white, true, 0, 1)
+    }
+
+    Gp.RoundRect(c, X, 488, W, 48, 14, 0xFF1E1E22)
+    Gp.Text(c, APP_NAME . "  v" . APP_VERSION, X, 492, W, 20, 12, blue, true, 1, 1)
+    Gp.Text(c, FormatTime(t0, "HH:mm") . " - " . FormatTime(A_Now, "HH:mm") . "  |  " . FormatTime(A_Now, "MMMM d, yyyy")
+        , X, 512, W, 20, 11, amber, false, 1, 1)
+
+    path := TMP_DIR . "\card_" . FormatTime(, "yyyyMMdd_HHmmss") . ".png"
+    return Gp.Save(c, path) ? path : ""
+}
+
 
 ; ============================================================================
 ;  GAME SETTINGS  (Fast Mode + Reduce Motion)
@@ -4220,8 +4643,8 @@ BuildGui(startPage := "dash") {
     AddToggle(g, "fish", "anchor", 500, 322, "Anchor at the NPC on start", Cfg.anchor, 200)
     Section(g, "fish", 214, 372, "GAME")
     Lbl(g, "fish", 214, 400, 120, "Screen resolution", th.muted)
-    AddDdl(g, "fish", "res", 340, 396, 130, ["Auto", "1920x1080", "2560x1440"]
-        , IdxOf(["Auto", "1920x1080", "2560x1440"], Cfg.resolution))
+    AddDdl(g, "fish", "res", 340, 396, 130, ["Auto", "1920x1080", "2560x1440", "1366x768"]
+        , IdxOf(["Auto", "1920x1080", "2560x1440", "1366x768"], Cfg.resolution))
     Lbl(g, "fish", 500, 400, 120, "Rod hotbar slot", th.muted)
     slots := ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
     AddDdl(g, "fish", "rod", 624, 396, 60, slots, IdxOf(slots, Cfg.rodSlot, 4))
@@ -4348,5 +4771,6 @@ Hotkey("F8", ToggleDebug)
 SetTimer(UpdateStats, 1000)
 SetTimer(HourlyTick, 15000)
 SetTimer(HookPump, 2200)
+SetTimer(HistPush, 20000)
 LogMsg(APP_NAME . " ready. Stand at the " . Cfg.npc . " (Interact prompt visible), rod equipped, "
     . "Shift Lock OFF, then press F2.")
