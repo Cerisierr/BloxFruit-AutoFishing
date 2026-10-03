@@ -159,6 +159,35 @@ Built from the screenshots you sent. Not yet tested in the game: the script was 
 
 ---
 
+## v1.16.5: Re-anchor after a missed bite (boss event / teleport)
+
+- **What the video showed:** the camera tilts up to the sea, the character is teleported to an arena, then comes back on the dock facing sideways instead of straight ahead. Casts then miss, and the old logic only counted the misses.
+- **Fix:** after the first missed bite, the macro re-runs the NPC anchor (camera and position reset, same routine as at start). The second missed bite in a row still triggers the bait-out logic, as before.
+- Log line: `[reanchor] no bite - re-establishing the NPC anchor`.
+- Limit: this only works if the character is back near the NPC after the event. If the teleport leaves it too far away, the anchor fails and the macro stops.
+- Not tested in the game.
+
+---
+
+## v1.16.4: Death detection (HP bar)
+
+- **Problem:** the macro never noticed the character had died. A boss knocked the character into the water, and the macro kept waiting for a bite until the 5-minute response timeout.
+- **Fix:** while fishing (waiting for a bite and during the reel), the macro reads the green HP bar at the bottom-left. If it stays empty for 3 s, the macro stops, logs `[death]`, and reports the stop reason (`character dead (HP bar gone)`) in the webhook summary.
+- The check is not run during NPC dialogues, because the dialogue hides the HP bar.
+- The macro does not respawn or walk back to the NPC. Restart it with F2 after you respawn and stand at the NPC again.
+- Not tested in the game.
+
+---
+
+## v1.16.3: Fausses morsures (faux "hooked")
+
+- **Cause:** la confirmation de morsure reposait sur 2 lectures consécutives espacées de 8 ms (environ une frame de jeu). Un flash rose/magenta dans la zone `bite` (effets du lancer, personnage, canne) suffisait donc à déclencher un clic.
+- **Correctif:** le "!" doit maintenant rester visible au moins 0.15 s (0.04 s en Fast bite) avant le clic. La confirmation ne dépend plus de la vitesse de la boucle.
+- **Journal:** `[bite] hooked` affiche désormais les détails de la détection (`biteInfo`).
+- Pas encore testé en jeu. Pistes restantes : réduire la zone `bite` pour exclure le personnage, et ne lancer la recherche de morsure qu'après le relâchement du lancer.
+
+---
+
 ## v1.16.2: Cast meter not found over bright sky (Fast Mode)
 
 - **What your screenshot showed:** the fill is lime (170,255,0 in the middle, 132,197,0 at the sides) and the empty part of the track is (25,55,69) over the bright blue sky.

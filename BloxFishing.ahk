@@ -308,6 +308,7 @@ RES_ORDER    := ["1920x1080", "2560x1440"]
 ; Regions as fractions of the game window: [left, top, right, bottom].
 Regions := {
     bar:   [0.2138, 0.7184, 0.8502, 0.8181],   ; reel bar search band
+    health: [0.0100, 0.8150, 0.2000, 0.8750],  ; HP bar (bottom-left): green fill, empty when dead
     bite:  [0.2800, 0.1600, 0.7200, 0.6000],   ; "!" marker area (excludes the top-right player list)
     meter: [0.2500, 0.3000, 0.5500, 0.8200],   ; cast charge meter: usual spot beside the character
     meterWide: [0.1800, 0.2200, 0.8200, 0.8800], ; fallback if the camera was moved
@@ -393,7 +394,7 @@ BotState := {
   , atNpc: true, bait: -1, sinceSell: 0, lastResponse: 0.0, witness: ""
   , flicked: false, lastEscaped: false, buyFailures: 0, lastBought: 0
   , meterFull: 0, biteInfo: "", zoomedAt: -1, biteMisses: 0
-  , npcHits: 0, stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: []
+  , npcHits: 0, hpNext: 0.0, hpLostSince: 0.0, hpDead: false, stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: []
 }
 Meter := {x: 0, top: 0, bot: 0}
 BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
@@ -497,7 +498,7 @@ Wait(sec) {
         Sleep(Min(20, Max(1, Round((endAt - Now()) * 1000))))
 }
 
-Alive() {
+Alive(hp := false) {
     if !BotState.running
         return false
     if (Timing.responseTimeout > 0 && Now() - BotState.lastResponse > Timing.responseTimeout) {
@@ -506,7 +507,50 @@ Alive() {
         Halt("no confirmed game response for " . Round(Timing.responseTimeout) . " s")
         return false
     }
+    ; hp = true only inside the fishing loops (the HP bar is hidden during NPC dialogues)
+    if (hp && HealthLost()) {
+        LogMsg("[death] HP bar gone for 3 s - character is dead, stopping")
+        Halt("character dead (HP bar gone)")
+        return false
+    }
     return true
+}
+
+; True once the HP bar has been empty for 3 s. Checked at most twice a second.
+HealthLost() {
+    if (Now() < BotState.hpNext)
+        return BotState.hpDead
+    BotState.hpNext := Now() + 0.5
+    win := BotState.win
+    r := SubRect(win, Regions.health)
+    gr := ScreenGrab.Get(r.w, r.h)
+    gr.Capture(r.x, r.y)
+    bits := gr.bits
+    green := 0, total := 0
+    y := 0
+    while (y < r.h) {
+        x := 0
+        while (x < r.w) {
+            v := NumGet(bits, (y * r.w + x) * 4, "UInt")
+            rr := (v >> 16) & 255
+            gg := (v >> 8) & 255
+            bb := v & 255
+            if (gg >= 180 && rr <= 120 && bb <= 80)     ; lime HP fill
+                green++
+            total++
+            x += 4
+        }
+        y += 4
+    }
+    if (total > 0 && green / total < 0.03) {
+        if (BotState.hpLostSince == 0.0)
+            BotState.hpLostSince := Now()
+        BotState.hpDead := (Now() - BotState.hpLostSince >= 3.0)
+    } else {
+        BotState.hpLostSince := 0.0
+        BotState.hpDead := false
+    }
+    return BotState.hpDead
 }
 
 NoteResponse() {
@@ -2456,24 +2500,25 @@ DoCast() {
 }
 
 WaitForBite() {
-    confirmNeeded := Cfg.fastBite ? 1 : 2
+    minHold := Cfg.fastBite ? 0.04 : 0.15      ; le "!" doit rester visible au moins ce temps (s)
     deadline := Now() + Timing.maxWaitBite
-    seen := 0
-    while (Alive() && Now() < deadline) {
+    firstSeen := 0
+    while (Alive(true) && Now() < deadline) {
         if BiteNow() {
-            seen++
-            if (seen >= confirmNeeded) {
+            if (firstSeen == 0)
+                firstSeen := Now()
+            if (Now() - firstSeen >= minHold) {
                 if !Cfg.fastBite
                     Sleep(Round(Timing.biteClickDelay * 1000))
                 Mouse.Tap()
                 BotStats.bites += 1
                 NoteResponse()
-                LogMsg("[bite] hooked")
+                LogMsg("[bite] hooked (" . BotState.biteInfo . ")")
                 HookHooked()
                 return true
             }
         } else {
-            seen := 0
+            firstSeen := 0
         }
         Sleep(Cfg.fastBite ? 1 : 8)
     }
@@ -2525,7 +2570,7 @@ Reel(spend := true) {
     t0 := Now()
     errSum := 0.0, driveTicks := 0, outTicks := 0, ticks := 0
 
-    while Alive() {
+    while Alive(true) {
         tn := Now()
         ticks++
         if (tn - t0 > Timing.maxReel) {
@@ -2770,6 +2815,14 @@ Cycle() {
         return
     if !WaitForBite() {
         BotState.biteMisses += 1
+        ; First missed bite: the view may have been moved (boss event, teleport, knockback),
+        ; so re-establish the NPC anchor (camera + position) before casting again.
+        if (BotState.biteMisses == 1 && Cfg.anchor && Alive()) {
+            LogMsg("[reanchor] no bite - re-establishing the NPC anchor (view may have shifted)")
+            if !EstablishAnchor()
+                Halt("re-anchor failed after a missed bite")
+            return
+        }
         if (BotState.biteMisses >= 2 && Alive()) {
             BotState.biteMisses := 0
             SetBait(0)
