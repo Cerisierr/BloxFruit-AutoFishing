@@ -1,6 +1,6 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.15 below).
+Current delivered file: `BloxFishing.ahk` (v1.16.1 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
 
 ---
@@ -155,6 +155,21 @@ Built from the screenshots you sent. Not yet tested in the game: the script was 
   - The profile is the one chosen in the window (Auto = nearest to your screen size). Pixels are offsets from the top-left of the game area.
 - **Click diagnostics:** every click logs `[click] plus target X,Y cursor X,Y` and flags `CURSOR MISSED THE TARGET` if Windows did not move the mouse there. The cursor is first jumped to the target, then the usual nudged move and click follow.
 - The Close click used by the error recovery uses the same table.
+- Not tested in the game.
+
+---
+
+## v1.16.1: Tilt a bit further
+
+- Default "Tilt down (px)" raised from 40 to 70. A saved value of exactly 40 (the old default) is moved to 70 on load. Any other value you typed is kept.
+
+---
+
+## v1.16: Camera tilt after the NPC, Fast Mode + Reduce Motion on start
+
+- **Camera tilt (new setting "Tilt down (px)", default 40, 0 = off):** after every conversation with the NPC (start-up anchor, sale, bait purchase, recovery) the macro moves the mouse down by that many pixels under Shift Lock, so the camera looks a little further down. It is done only right after the NPC dialogue, never at other times, because the movement would add up and end with the camera on the ground. Raise the number to look further down.
+- **Game settings on start (new switch on the Fishing page, on by default):** before the NPC anchor the macro clicks the gear above the compass, scrolls the Settings list to the bottom, switches **Fast Mode** and **Reduce Motion** to On if they are not already (it reads the green button first), then closes the window. Positions come from your 1280x720 recording and scale with the game window; the yellow title bar is located first because the window slides while it opens.
+- **Log:** `[settings]` lines say what was found and done, and `[camera] tilted down ...` after each tilt.
 - Not tested in the game.
 
 ---

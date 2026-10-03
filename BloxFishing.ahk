@@ -296,7 +296,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.15.0"
+APP_VERSION := "1.16.1"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
@@ -375,7 +375,7 @@ NPC_LIST := ["Fisherman", "Angler"]
 Cfg := {
     resolution: "Auto", rodSlot: "4", fastBite: false, slowFlick: false
   , chest: true, anchor: true, flick: true, perfect: true, perfectPct: 97
-  , zoomLock: true, zoomOut: 8, zoomEvery: 5
+  , zoomLock: true, zoomOut: 8, zoomEvery: 5, tiltPx: 70, gameFast: true
   , npc: "Fisherman", buyBait: true, baitType: "Basic Bait", baitNow: 0, baitPer: 40, baitRow: 0
   , sellOn: true, sellEvery: 100, trackIncome: true, trackLevel: true
   , theme: "Midnight"
@@ -1799,12 +1799,33 @@ ZoomReset() {
     LogMsg("[camera] zoom locked: all the way in, then out " . Cfg.zoomOut . " notches")
 }
 
-EnterFishingStance() {
+; afterNpc = true when we have just talked to the NPC. The dialogue leaves the
+; camera at a known pitch, so tilting down once here is repeatable; tilting at any
+; other time would add up and end with the camera looking at the ground.
+EnterFishingStance(afterNpc := false) {
     if !SetShiftLock(true)
         return false
     BotState.atNpc := false
     ZoomReset()
+    if afterNpc
+        TiltCameraDown()
     return true
+}
+
+; Real relative mouse movement (Shift Lock turns it into camera rotation), in small steps.
+TiltCameraDown() {
+    n := Cfg.tiltPx
+    if (n <= 0 || !BotState.running || !BotState.shiftLock)
+        return
+    left := n
+    while (left > 0 && Alive()) {
+        step := Min(8, left)
+        DllCall("mouse_event", "UInt", 0x0001, "Int", 0, "Int", step, "UInt", 0, "UPtr", 0)
+        left -= step
+        Sleep(14)
+    }
+    Wait(0.25)
+    LogMsg("[camera] tilted down " . n . " px (after the NPC)")
 }
 
 ; Wait until a complete, settled menu page is showing.
@@ -2029,7 +2050,7 @@ EscapeDialogue() {
     SetRod(false)
     SetRod(true)
     BotState.atNpc := true
-    EnterFishingStance()
+    EnterFishingStance(true)
     StepAwayFromNpc()
     return true
 }
@@ -2093,7 +2114,7 @@ EstablishAnchor() {
     }
     Wait(ShopCfg.afterNevermind)
     SetRod(true)
-    if !EnterFishingStance() {
+    if !EnterFishingStance(true) {
         LogMsg("[start] Shift Lock did not engage")
         return false
     }
@@ -2108,7 +2129,7 @@ ShopFail(why, what) {
         . " craft=" . (CraftUp() ? 1 : 0) . ")")
     RecoverDialogue()
     SetRod(true)
-    EnterFishingStance()
+    EnterFishingStance(true)
     return false
 }
 
@@ -2217,7 +2238,7 @@ BuyBaitRoute() {
     }
     Wait(ShopCfg.afterNevermind)
     SetRod(true)
-    EnterFishingStance()
+    EnterFishingStance(true)
     LogMsg("[shop] done - " . bought . " " . bait.name . " bought")
     return true
 }
@@ -2307,7 +2328,7 @@ SellFish(stayAtNpc := false) {
         return true
     }
     SetRod(true)
-    EnterFishingStance()
+    EnterFishingStance(true)
     LogMsg("[sell] done")
     return true
 }
@@ -2813,6 +2834,8 @@ RunBot() {
         . " perfect=" . (Cfg.perfect ? "on" : "off"))
     if (Cfg.buyBait && Cfg.baitNow <= 0)
         LogMsg("[start] bait count not given: restocking happens only after 2 casts in a row get no bite")
+    if Cfg.gameFast
+        ApplyGameSettings()
     startOk := true
     if Cfg.anchor
         startOk := EstablishAnchor()
@@ -2903,6 +2926,8 @@ SETTINGS_SPEC := [
   , ["camera", "zoomLock", "1", "b"]
   , ["camera", "zoomOut", "8", "i"]
   , ["camera", "zoomEvery", "5", "i"]
+  , ["camera", "tiltPx", "70", "i"]
+  , ["game", "gameFast", "1", "b"]
   , ["shop", "npc", "Fisherman", "s"]
   , ["shop", "buyBait", "1", "b"]
   , ["shop", "baitType", "Basic Bait", "s"]
@@ -2955,6 +2980,8 @@ LoadSettings() {
         Cfg.zoomOut := 8                                 ; new default camera distance
     Cfg.perfectPct := Min(100, Max(60, Cfg.perfectPct))
     Cfg.hkEveryMin := Max(1, Cfg.hkEveryMin)
+    if (Cfg.tiltPx == 40)                                ; old v1.16 default was too little
+        Cfg.tiltPx := 70
     Cfg.baitPer := Min(100, Max(10, (Cfg.baitPer // 10) * 10))
     if !THEMES.Has(Cfg.theme)
         Cfg.theme := "Midnight"
@@ -2998,6 +3025,7 @@ SyncSettings(save := true) {
         Cfg.perfectPct := Min(100, Max(60, IntOf(Ui.perfectPct, 97)))
         Cfg.zoomOut := Min(30, Max(0, IntOf(Ui.zoomOut, 8)))
         Cfg.zoomEvery := Max(0, IntOf(Ui.zoomEvery, 5))
+        Cfg.tiltPx := Min(300, Max(0, IntOf(Ui.tiltPx, 70)))
         Cfg.baitNow := Min(100, Max(0, IntOf(Ui.baitNow, 0)))
         Cfg.baitPer := Min(100, Max(10, Integer(Ui.baitPer.Text)))
         Cfg.sellEvery := Max(0, IntOf(Ui.sellEvery, 100))
@@ -3567,6 +3595,147 @@ HookTest(*) {
 }
 
 ; ============================================================================
+;  GAME SETTINGS  (Fast Mode + Reduce Motion)
+; ============================================================================
+; Positions are fractions of the game window, measured on a 1280x720 recording
+; of the Settings window. The window slides while it opens, so the yellow title
+; bar is located first and the rows are measured from it.
+GEAR_FR := [0.0086, 0.4306]    ; gear icon above the compass
+SET_TITLE_X := 0.33            ; column that only crosses the title bar
+SET_ON_X := 0.5992             ; centre of the "On" buttons
+SET_SAMPLE_X := 0.5664         ; left padding of the "On" button (no text there)
+SET_CLOSE_X := 0.7398          ; red X
+SET_FAST_DY := 0.3931          ; from the title-bar centre, list scrolled to the bottom
+SET_MOTION_DY := 0.4819
+
+PxAt(x, y) {
+    g := ScreenGrab.Get(1, 1)
+    g.Capture(x, y)
+    v := NumGet(g.bits, 0, "UInt")
+    return {r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255}
+}
+
+IsGreenBtn(p) {
+    return p.g >= 120 && p.g > p.r + 50 && p.g > p.b + 50
+}
+
+; Screen Y of the centre of the yellow "Settings" title bar, or -1.
+FindSettingsTitle() {
+    win := BotState.win
+    gr := ScreenGrab.Get(1, win.h)
+    gr.Capture(win.x + Round(win.w * SET_TITLE_X), win.y)
+    bits := gr.bits
+    minH := Round(win.h * 0.04)
+    maxH := Round(win.h * 0.09)
+    best := -1, bestLen := 0, runStart := -1
+    y := 0
+    while (y <= win.h) {
+        yellow := false
+        if (y < win.h) {
+            v := NumGet(bits, y * 4, "UInt")
+            rr := (v >> 16) & 255
+            gg := (v >> 8) & 255
+            bb := v & 255
+            yellow := (rr > 225 && gg > 195 && gg < 240 && bb < 80)
+        }
+        if yellow {
+            if (runStart < 0)
+                runStart := y
+        } else if (runStart >= 0) {
+            len := y - runStart
+            if (len >= minH && len <= maxH && len > bestLen) {
+                bestLen := len
+                best := win.y + runStart + len // 2
+            }
+            runStart := -1
+        }
+        y++
+    }
+    return best
+}
+
+; Wait for the title bar to stop moving (the window slides while it opens).
+WaitSettingsTitle(timeout) {
+    deadline := Now() + timeout
+    last := -2
+    while (Now() < deadline && Alive()) {
+        y := FindSettingsTitle()
+        if (y >= 0 && y == last)
+            return y
+        last := y
+        Sleep(120)
+    }
+    return -1
+}
+
+ApplyGameSettings() {
+    if !Cfg.gameFast
+        return true
+    win := BotState.win
+    LogMsg("[settings] turning on Fast Mode and Reduce Motion in the game settings")
+    if !FocusGame()
+        return false
+    if (FindSettingsTitle() < 0) {
+        Mouse.ClickAt(win.x + Round(win.w * GEAR_FR[1]), win.y + Round(win.h * GEAR_FR[2]), 0.30, 0.10)
+    }
+    ty := WaitSettingsTitle(3.0)
+    if (ty < 0) {
+        LogMsg("[settings] the Settings window did not open - skipped (the gear is above the compass)")
+        return false
+    }
+
+    ; scroll the list to the bottom with the cursor over it
+    px := win.x + win.w // 2
+    py := ty + Round(win.h * 0.25)
+    MouseMove(px - 3, py - 3, 0)
+    Sleep(40)
+    MouseMove(3, 3, 0, "R")
+    Sleep(80)
+    Loop 14 {
+        Click("WheelDown")
+        Sleep(70)
+    }
+    Wait(0.5)
+    ty2 := WaitSettingsTitle(2.0)
+    if (ty2 >= 0)
+        ty := ty2
+
+    ok := true
+    sx := win.x + Round(win.w * SET_SAMPLE_X)
+    bx := win.x + Round(win.w * SET_ON_X)
+    for item in [["Fast Mode", SET_FAST_DY], ["Reduce Motion", SET_MOTION_DY]] {
+        y := ty + Round(win.h * item[2])
+        if IsGreenBtn(PxAt(sx, y)) {
+            LogMsg("[settings] " . item[1] . " is already on")
+            continue
+        }
+        Mouse.ClickAt(bx, y, 0.25, 0.10)
+        Wait(0.5)
+        if IsGreenBtn(PxAt(sx, y)) {
+            LogMsg("[settings] " . item[1] . " switched on")
+        } else {
+            LogMsg("[settings] " . item[1] . " could NOT be switched on - check the Settings window")
+            ok := false
+        }
+    }
+
+    cx := win.x + Round(win.w * SET_CLOSE_X)
+    Loop 2 {
+        cy := FindSettingsTitle()
+        if (cy < 0)
+            break
+        Mouse.ClickAt(cx, cy, 0.25, 0.10)
+        Wait(0.6)
+    }
+    if (FindSettingsTitle() >= 0) {
+        LogMsg("[settings] could not close the Settings window")
+        ok := false
+    }
+    Wait(0.8)                                            ; let the textures switch off
+    return ok
+}
+
+; ============================================================================
 ;  THEMES
 ; ============================================================================
 THEME_ORDER := ["Midnight", "Obsidian", "Ocean", "Emerald", "Sunset", "Rose", "Daylight"]
@@ -3946,6 +4115,8 @@ BuildGui(startPage := "dash") {
     Lbl(g, "fish", 272, 209, 170, "Re-apply the zoom every", th.muted)
     AddEdit(g, "fish", "zoomEvery", 430, 205, 54, Cfg.zoomEvery, true)
     Lbl(g, "fish", 492, 209, 100, "casts", th.muted)
+    Lbl(g, "fish", 590, 209, 100, "Tilt down (px)", th.muted)
+    AddEdit(g, "fish", "tiltPx", 690, 205, 54, Cfg.tiltPx, true)
     Section(g, "fish", 214, 256, "REELING AND RECOVERY")
     AddToggle(g, "fish", "chest", 214, 282, "Collect treasure chests", Cfg.chest, 200)
     AddToggle(g, "fish", "fastBite", 500, 282, "Faster bite reaction", Cfg.fastBite, 200)
@@ -3958,6 +4129,7 @@ BuildGui(startPage := "dash") {
     Lbl(g, "fish", 500, 400, 120, "Rod hotbar slot", th.muted)
     slots := ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
     AddDdl(g, "fish", "rod", 624, 396, 60, slots, IdxOf(slots, Cfg.rodSlot, 4))
+    AddToggle(g, "fish", "gameFast", 214, 436, "Turn on Fast Mode + Reduce Motion when the macro starts", Cfg.gameFast, 480)
     Lbl(g, "fish", 214, 452, 590, "Perfect cast reads the whole charge bar (orange > yellow > green) and releases when it reaches the"
         . " chosen percentage. With zoom-out 8 the bar is small, so 96-98 % is a good value.", th.muted, 9, 400, 44)
 
