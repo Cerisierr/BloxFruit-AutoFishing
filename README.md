@@ -36,12 +36,36 @@ Current version: **1.24.2** (see `CHANGELOG.md` for the full history).
 2. Put `BloxFishing.ahk` anywhere on your PC.
 3. Double-click `BloxFishing.ahk` and accept the administrator (UAC) prompt.
 4. Start Roblox and open **Blox Fruits**.
-5. Go to your fishing NPC (Fisherman or Angler) so the **Interact** prompt is visible.
+5. Go to your fishing NPC (Fisherman or Angler) and stand exactly as described in **Critical: stand at the NPC** below, with the **Interact** prompt visible.
 6. Equip your fishing rod.
 7. Make sure **Shift Lock is OFF**.
 8. Configure the macro window, then press **F2**.
 
 The macro enables and verifies Shift Lock by itself when it starts fishing.
+
+## Critical: stand at the NPC, right on the edge of the interaction range
+
+**Required.** Your character must be at the outer edge of the Fisherman's interaction circle and lined up at 0°: directly in front of or directly behind the NPC, on one straight line through its centre. Do not start from a diagonal angle. This lets the game's push return you to the same edge instead of drifting sideways.
+
+**Do this**
+
+- Face the Fisherman and wait until the Interact prompt is visible.
+- Move to the outer boundary while staying on the NPC's straight centre line. Imagine a line from the NPC's middle through your character. That is the 0° lane.
+- Use only tiny adjustments. You should be close enough to interact but not deep inside the circle. Keep the camera still, then start the macro.
+
+**Avoid**
+
+Too close can reopen the dialogue while casting; too far makes the anchor fail. Starting even slightly diagonal means the game's outward push can land you on another edge. Repeating the same backward movement from that wrong edge compounds the angle until the macro can miss the NPC.
+
+**Done looks like**
+
+F2 opens and closes the NPC dialogue once. After the game's push, you remain on the same straight 0° lane at the fishing position, so the rod can cast without reopening dialogue.
+
+**Reference image**
+
+![Standing at the edge of the Fisherman's interaction circle, in line with the NPC](images/anchor-reference.png)
+
+---
 
 ## Before pressing F2
 
@@ -167,6 +191,8 @@ BloxFishing/
 ├── BloxFishing.ini       ← generated automatically (settings + saved quest state)
 ├── BloxFishing.log       ← generated when debug logging is enabled (F8)
 ├── errors/               ← game screenshots saved on every problem (newest 40 kept)
+├── images/
+│   └── anchor-reference.png   ← reference image used by the README
 ├── CHANGELOG.md
 ├── README.md
 ├── LICENSE
