@@ -2,22 +2,31 @@
 
 AutoHotkey v2 macro for automating fishing in **Blox Fruits**.
 
-The macro uses screen detection and color recognition to detect the fishing bar, bite indicator, fish position, chests and NPC/shop menus. It also includes an automatic reel controller and optional bait purchasing / fish selling.
+The macro uses screen capture, color detection and Windows OCR to read the fishing bar, the bite indicator, the fish position, chests, the cast charge meter, NPC/shop menus and the quest panel. It controls the reel automatically and can buy bait, sell fish, do the Angler quests and report to Discord.
+
+Current version: **1.24.2** (see `CHANGELOG.md` for the full history).
+
+## Features
+
+- Automatic casting (optional **Perfect cast**), bite detection and reel controller
+- Treasure chest collection during the minigame
+- Auto-buy bait and auto-sell fish at the NPC (live bait counter, income and level tracking)
+- **Auto-quest at the Angler** (all four quest types, survives a restart)
+- Death detection, re-anchoring after a missed bite, safety stops with a game screenshot
+- Discord webhook: live messages, hourly report with an image card, quest messages, error alerts
+- GUI with a dashboard, a live activity log and several color themes
+- Pause / resume without losing the session
 
 ## Requirements
 
 - Windows
 - [AutoHotkey v2.0+](https://www.autohotkey.com/)
-- Roblox
-- Blox Fruits
-- The macro must be run with administrator privileges
-- Roblox should be running in **windowed or borderless fullscreen**
-- Supported resolution profiles:
-  - `1920x1080`
-  - `2560x1440`
-  - `Auto`
+- Roblox and Blox Fruits
+- The macro must be run with administrator privileges (it asks for them itself)
+- Roblox in **windowed or borderless fullscreen**
+- Supported resolution profiles: `1920x1080`, `2560x1440`, `1366x768` (RDP / small screens) and `Auto`
 
-> The selected resolution must match the Roblox game area closely. A mismatch can cause the screen detection to fail.
+> The selected profile must match the Roblox game area closely, otherwise screen detection can fail. The `1366x768` profile is scaled from 1920x1080 and has not been fully measured.
 
 ---
 
@@ -25,445 +34,213 @@ The macro uses screen detection and color recognition to detect the fishing bar,
 
 1. Install **AutoHotkey v2**.
 2. Put `BloxFishing.ahk` anywhere on your PC.
-3. Double-click `BloxFishing.ahk`.
-4. Allow the administrator/UAC prompt if Windows asks.
-5. Start Roblox and open **Blox Fruits**.
-6. Go to the fishing NPC and make sure the **Interact** prompt is visible.
-7. Equip your fishing rod.
-8. Make sure **Shift Lock is OFF** before starting.
-9. Open the macro window and configure your settings.
-10. Press **F2** to start.
+3. Double-click `BloxFishing.ahk` and accept the administrator (UAC) prompt.
+4. Start Roblox and open **Blox Fruits**.
+5. Go to your fishing NPC (Fisherman or Angler) so the **Interact** prompt is visible.
+6. Equip your fishing rod.
+7. Make sure **Shift Lock is OFF**.
+8. Configure the macro window, then press **F2**.
 
-The macro will automatically enable and verify Shift Lock when it starts fishing.
+The macro enables and verifies Shift Lock by itself when it starts fishing.
 
----
+## Before pressing F2
 
-## Important: First setup
-
-Before pressing F2:
-
-- Roblox must already be open.
-- You must be in Blox Fruits.
-- Your fishing rod must be equipped.
-- You should be standing close enough to the fishing NPC for the Interact prompt to appear.
-- Shift Lock must be **OFF**.
-- The rod hotbar slot must be correct in the macro.
-- Your Roblox game resolution should match the selected profile.
-
-The recommended setup is to enable:
-
-- **Anchor at the NPC on start**
-- **Perfect cast**
-- **Collect chests**
+- Roblox is open and you are in Blox Fruits.
+- Your rod is equipped and the **Rod hotbar slot** in the macro is correct.
+- You are close enough to the NPC for the Interact prompt to appear.
+- Shift Lock is OFF.
+- The resolution profile matches your game window.
+- Use **Check setup** on the Dashboard to verify administrator status, resolution, game area and reel bar detection.
 
 ---
 
-## Macro controls
+## Controls
 
 | Key | Action |
 |---|---|
 | `F2` | Start / Stop the macro |
-| `F4` | Close the macro |
-| `F8` | Enable / disable debug log file |
+| `F3` | Pause / Resume |
+| `F4` | Quit the macro |
+| `F8` | Enable / disable the debug log file |
 
-You can also use the buttons in the macro window.
-
-### F2 — Start / Stop
-
-Press `F2` to start the fishing loop.
-
-Press `F2` again to stop it.
-
-When stopped, the macro releases the mouse button automatically.
-
-### F4 — Quit
-
-Completely closes the macro.
-
-### F8 — Debug log
-
-Toggles the debug log file:
-
-```text
-BloxFishing.log
-```
-
-The file is created in the same folder as the `.ahk` file when debug logging is enabled.
+The same actions are available as buttons on the Dashboard. When stopped, the macro releases the mouse button automatically.
 
 ---
 
-# Configuration
+# Pages of the macro window
 
-The macro has three configuration sections.
+## Dashboard
 
-## Display
+Start / Stop, Check setup, Pause, Quit. Tiles for fish caught, bait left, money generated, level and run time, plus the live activity log (`[cast]`, `[bite]`, `[reel]`, `[quest]` ...).
 
-### Screen resolution
+## Fishing
 
-Available options:
+**Casting**
+- **Perfect cast**: reads the whole charge bar (orange > yellow > green) and releases at the chosen percentage (**Release at**, default 97 %). With zoom-out 8 the bar is small, so 96-98 % works well. With Perfect cast off, a quick fixed-timing cast is used.
+- **Lock camera zoom**, **Zoom-out notches**, **Re-apply the zoom every N casts**, **Tilt down (px)**: camera setup used for stable detection.
 
-- `Auto`
-- `1920x1080`
-- `2560x1440`
+**Reeling and recovery**
+- **Collect treasure chests**
+- **Faster bite reaction**: reacts to the bite faster. Turn it off if bite detection is unreliable.
+- **Slower fish trick**: slower timing for the quick unequip / re-equip of the rod. Leave it off if the normal timing works.
+- **Anchor at the NPC on start** (recommended): opens and closes the NPC dialogue, returns to the fishing position, enables Shift Lock and checks that the cursor is centered, so the macro starts from a known position.
 
-`Auto` selects the closest supported profile based on your screen resolution.
+**Game**
+- **Screen resolution**: `Auto`, `1920x1080`, `2560x1440` or `1366x768`.
+- **Rod hotbar slot**: `1`-`9`, `0`.
+- **Turn on Fast Mode + Reduce Motion when the macro starts**.
 
-If you are using 1920×1080, select:
+## Quest
 
-```text
-1920x1080
-```
+Auto-quest only works when **AFK at** is set to **Angler** (Shop and Bait page).
 
-If you are using 2560×1440, select:
+- **Auto-quest** switch and **Rod skill key** (`Z`, `X`, `C`, `V` or `F`, default `Z`).
+- Live quest status and the list of quests the macro handles:
+  1. Catch a Common / Uncommon / Rare / Epic / Legendary / Mythical fish
+  2. Catch 3 fish within 2:05 (fast bite is forced on; sales and bait trips wait)
+  3. 3 perfect casts + 3 perfect reactions (Perfect cast and fast bite are forced on; done only when both counters read n/n)
+  4. Use a rod skill 3 times (uses the Rod skill key)
+- Discord toggles: **Quest accepted**, **Quest finished**, **Quest failed**.
 
-```text
-2560x1440
-```
+How it works:
+- The Angler offers one quest every 15 minutes, counted from the moment a quest is accepted. An unfinished quest must be finished or abandoned before a new one is offered.
+- The macro reads the quest panel (top-left HUD) with Windows OCR and checks the progress bar with a cheap pixel scan.
+- When the quest is finished it talks to the Angler once to hand it in. If the Angler answers "Still waitin' on you to get that task done", the macro treats the quest as not finished and goes back to fishing.
+- If the Angler says he has no tasks yet, the macro waits for the cooldown and asks again.
+- The quest state is saved in `BloxFishing.ini`, so a restart continues the quest instead of asking for a new one.
+- Three failed visits in a row switch auto-quest off until the next start.
+- Unknown quest texts are written to the log as `[quest] UNKNOWN quest text ...`. The Fisherman has quests the macro does not know yet.
 
-The macro also checks the actual Roblox client area when it starts.
+## Shop and Bait
 
----
+- **AFK at**: `Fisherman` or `Angler`. With the Angler, auto-sell is off and auto-quest is available.
+- **Auto-buy bait when it runs low**, **Bait type**, **Bait in inventory now** (`0` = do not count, max 100, updates live), **Bait per purchase** (10-100, multiples of 10). The inventory holds 100 bait at most, so the macro only buys what fits.
+- Baits: Basic, Kelp, Good (Sea 1); Abyssal (Sea 2, needs Demonic Wisp); Frozen (Sea 2, needs Yeti Fur); Epic (Sea 3, needs Terror Eyes); Carnivore (Sea 3, needs Dragon Scale). Locked baits cannot be bought.
+- **Auto-sell fish every N catches**
+- **Track income** and **Track levels**: read your `$` and level with Windows OCR.
 
-# Fishing settings
+## Webhook
 
-## Rod hotbar slot
-
-Select the number corresponding to the slot containing your fishing rod.
-
-Example:
-
-```text
-Rod in slot 4 → select 4
-```
-
-The default is:
-
-```text
-4
-```
-
-## Faster bite reaction
-
-When enabled, the macro reacts to the bite indicator faster.
-
-This can reduce the confirmation time before clicking the bite.
-
-If you experience unreliable bite detection, try disabling this option.
-
-## Slower fish trick
-
-Changes the timing used when the macro quickly unequips and re-equips the rod after fishing.
-
-If the normal timing works correctly, leave this disabled.
-
-## Collect chests
-
-When enabled, the reel controller can detect and attempt to collect treasure chests during the fishing minigame.
-
-## Anchor at the NPC on start
-
-Recommended.
-
-When enabled, the macro starts by:
-
-1. Opening the fishing NPC dialogue.
-2. Closing the dialogue.
-3. Returning to the fishing position.
-4. Enabling Shift Lock.
-5. Verifying that the cursor is centered.
-
-This gives the macro a known starting position.
-
-## Perfect cast
-
-When enabled, the macro attempts to release the cast at full charge instead of using a fixed basic timing.
-
-The macro learns the approximate full charge height from the game.
-
----
-
-# Shop settings
-
-## Buy bait
-
-Automatically handles bait purchases from the fishing NPC.
-
-The macro can open the NPC dialogue, navigate the shop and craft/buy the configured amount.
-
-## Bait now
-
-This tells the macro how much bait you currently have.
-
-Example:
-
-```text
-Bait now: 35
-```
-
-Use `0` if you do not want the macro to track your current bait amount.
-
-## Bait per purchase
-
-Controls how much bait the macro attempts to purchase.
-
-The value is rounded to multiples of 10.
-
-Example:
-
-```text
-40
-```
-
-means the macro will attempt to buy 40 bait.
-
-## Sell every
-
-When enabled, the macro sells the fish after the configured number of catches.
-
-Example:
-
-```text
-Sell every: 100 catches
-```
-
-The macro will periodically return to the NPC and sell the fish before continuing.
+- **Enable webhook**, **Webhook URL**, optional separate **hourly report URL**, display name and mention.
+- Messages you can toggle: macro started, stopped + session summary, fish sold, bait purchased, screenshots, errors + game screenshot, hourly report (interval in minutes), buying / selling, casting and hooked, fish caught + progress, catch screenshot, chest collected, and the three quest messages.
+- **Send report now** sends the hourly report image card immediately.
+- The stop and error messages are plain text embeds sent to the normal webhook. The hourly image card goes only to the hourly report URL (or the normal one if that field is empty).
+- On an error stop, one message includes the reason, the session summary, the last 8 log lines and a game screenshot.
 
 ---
 
 # How the fishing loop works
 
-Once started, the macro roughly follows this process:
-
 ```text
 Start
   ↓
-Check Roblox
-  ↓
-Establish NPC anchor
+Check Roblox, establish NPC anchor
   ↓
 Enable + verify Shift Lock
   ↓
-Check bait / sell requirements
+Check quest / bait / sell requirements
   ↓
-Cast
+Cast → wait for bite → click the bite
   ↓
-Wait for bite
+Detect fishing bar → track fish + green zone → control the reel
   ↓
-Click the bite
-  ↓
-Detect fishing bar
-  ↓
-Track fish + green zone
-  ↓
-Control the reel
-  ↓
-Detect the end of the minigame
-  ↓
-Dismiss the catch / recipe notification
+Detect the end of the minigame, dismiss the catch notification
   ↓
 Repeat
 ```
 
-If something goes wrong, the macro has several recovery checks and can stop itself when it cannot safely confirm the game state.
+If something goes wrong, the macro has several recovery checks and stops itself when it cannot safely confirm the game state.
 
----
+## Automatic detection
 
-# Automatic detection
+The macro uses screen capture and color detection for: fishing bar, green reel zone, fish position, treasure chests, bite indicator, cast charge meter, NPC dialogue panels, craft button, recipe `Learn` button, fishing progress and the quest panel. It also uses Windows OCR for the quest text, money, level and bait count.
 
-The macro does not rely only on fixed mouse positions for the fishing minigame.
-
-It uses screen capture and color detection to identify:
-
-- Fishing bar
-- Green reel zone
-- Fish position
-- Treasure chests
-- Bite indicator
-- Cast charge meter
-- NPC dialogue panels
-- Craft button
-- Recipe `Learn` button
-- Fishing progress
-
-The main fishing regions and click points are defined as **fractions of the Roblox game window**, allowing the same calibration to work across the supported resolution profiles.
-
----
-
-# BloxFishing.ini
-
-The macro automatically creates:
-
-```text
-BloxFishing.ini
-```
-
-in the same directory as the `.ahk` file.
-
-This file stores your settings so you do not have to configure everything again after restarting the macro.
-
-Do not delete it unless you want the settings to return to their defaults.
-
-Example settings stored in the INI include:
-
-```ini
-[display]
-resolution=Auto
-
-[fishing]
-rodSlot=4
-fastBite=0
-slowFlick=0
-chest=1
-anchor=1
-perfect=1
-
-[shop]
-buyBait=1
-baitNow=0
-baitPer=40
-sellOn=1
-sellEvery=100
-```
-
-The exact file is generated and updated automatically by the macro.
-
----
-
-# BloxFishing.log
-
-When debug logging is enabled with `F8`, the macro writes detailed information to:
-
-```text
-BloxFishing.log
-```
-
-This can contain information such as:
-
-```text
-[start]
-[cast]
-[bite]
-[reel]
-[chest]
-[bait]
-[sell]
-[catch]
-[warn]
-[stop]
-```
-
-This log is useful when troubleshooting detection or configuration problems.
-
----
-
-# Troubleshooting
-
-## The macro does not click Roblox
-
-Make sure:
-
-1. AutoHotkey is running as administrator.
-2. Roblox is also running normally.
-3. Roblox is focused.
-4. The macro was started after Roblox was opened.
-
-The script automatically requests administrator privileges because Roblox can ignore injected input from a non-elevated process.
-
----
-
-## The macro says Shift Lock could not be verified
-
-Check:
-
-- Roblox is focused.
-- Shift Lock Switch is enabled in Roblox settings.
-- Shift Lock is currently OFF before pressing F2.
-- You are actually inside Blox Fruits.
-
-The macro intentionally refuses to start fishing if it cannot verify the centered Shift Lock state.
-
----
-
-## The fishing bar is not detected
-
-Check:
-
-- Your resolution profile.
-- Your Roblox game/window size.
-- That the Roblox client is not heavily resized.
-- That the game is visible and not covered by another window.
-
-Use **Check setup** in the GUI.
-
-It reports:
-
-- Administrator status
-- Screen resolution
-- Selected profile
-- Roblox game area
-- Whether the reel bar is currently detected
-
----
-
-## The bite is not detected
-
-Try disabling or enabling:
-
-```text
-Faster bite reaction
-```
-
-Also make sure Roblox is displayed normally and the bite indicator is not covered by another UI element.
-
----
-
-## The rod slot is wrong
-
-If your rod is in slot 5, for example:
-
-```text
-Rod hotbar slot → 5
-```
-
-The macro uses the selected hotbar slot when it needs to equip or flick the rod.
-
----
-
-## The shop does not work
-
-Make sure:
-
-- You are close enough to the fishing NPC.
-- The Interact prompt is visible when starting.
-- The selected rod slot is correct.
-- The NPC dialogue is not already stuck open.
-- The resolution profile is correct.
-
-The macro uses live menu detection when possible and has calibrated fallback click positions.
+Regions and click points are fractions of the Roblox game window, so the same calibration works across the supported resolution profiles.
 
 ---
 
 # Files
 
-A typical folder can look like:
-
 ```text
 BloxFishing/
 ├── BloxFishing.ahk
-├── BloxFishing.ini       ← generated automatically
-├── BloxFishing.log       ← generated when debug logging is enabled
+├── BloxFishing.ini       ← generated automatically (settings + saved quest state)
+├── BloxFishing.log       ← generated when debug logging is enabled (F8)
+├── errors/               ← game screenshots saved on every problem (newest 40 kept)
+├── CHANGELOG.md
 ├── README.md
 ├── LICENSE
 └── .gitignore
 ```
 
-You do not need to manually create the `.ini` or `.log` files.
+## BloxFishing.ini
+
+Created next to the script. It stores all your settings (display, fishing, camera, quest, shop, webhook) and the current quest, so a restart does not lose them. Delete it only if you want the defaults back.
+
+```ini
+[display]
+resolution=Auto
+theme=Midnight
+
+[fishing]
+rodSlot=4
+perfect=1
+perfectPct=97
+chest=1
+anchor=1
+
+[quest]
+questOn=1
+questKey=Z
+
+[shop]
+npc=Fisherman
+buyBait=1
+baitPer=40
+sellOn=1
+sellEvery=100
+```
+
+The `[game]` section also accepts `rdp=auto|on|off` (remote desktop handling, `auto` by default).
+
+## BloxFishing.log
+
+Toggle with `F8`. Contains the tagged lines that also appear in the activity log: `[start]`, `[cast]`, `[bite]`, `[reel]`, `[chest]`, `[bait]`, `[sell]`, `[catch]`, `[quest]`, `[error]`, `[warn]`, `[stop]`. Send the relevant lines when reporting a problem.
+
+---
+
+# Troubleshooting
+
+**The macro does not click Roblox**
+Run it as administrator, start it after Roblox is open and keep Roblox focused. Roblox ignores injected input from a non-elevated process.
+
+**Shift Lock could not be verified**
+Roblox must be focused, Shift Lock Switch must be enabled in Roblox settings, Shift Lock must be OFF before F2, and you must be inside Blox Fruits. The macro refuses to fish when it cannot confirm the centered state.
+
+**The fishing bar is not detected**
+Check the resolution profile and that the Roblox window is not heavily resized or covered. Use **Check setup**.
+
+**The bite is not detected**
+Try turning **Faster bite reaction** on or off, and make sure no other UI covers the bite indicator.
+
+**The rod slot is wrong**
+Set **Rod hotbar slot** to the slot that holds your rod.
+
+**The shop does not work**
+Stand close enough to the NPC for the Interact prompt, check the rod slot and resolution, and make sure no NPC dialogue is already stuck open.
+
+**The quest is reported finished too early, or the Angler says "Still waitin'"**
+Fixed in 1.24.1 / 1.24.2. If it still happens, send the `[quest] progress:` and `[quest] the Angler says` log lines.
+
+**The quest is not recognised**
+Send the `[quest] UNKNOWN quest text` log line and a screenshot of the quest panel and the dialogue.
+
+**Something stopped the macro**
+Look in the `errors` folder for the game screenshot taken at the moment of the problem (it is also sent to Discord when **Errors + game screenshot** is on).
 
 ---
 
 # Recommended first test
-
-For the first run, use:
 
 ```text
 Resolution:        Auto
@@ -473,19 +250,17 @@ Slower fish trick: OFF
 Collect chests:    ON
 NPC anchor:        ON
 Perfect cast:      ON
+Auto-quest:        OFF
 Buy bait:          OFF
 Sell every:        OFF
+Webhook:           OFF
 ```
 
-Then:
-
-1. Stand at the fishing NPC.
-2. Make sure the Interact prompt is visible.
-3. Equip your rod.
-4. Turn Shift Lock OFF.
-5. Press **Check setup**.
-6. If everything looks correct, press **F2**.
-7. Watch the first few cycles before leaving it unattended.
+1. Stand at the fishing NPC with the Interact prompt visible.
+2. Equip your rod and turn Shift Lock OFF.
+3. Press **Check setup**.
+4. If everything looks correct, press **F2**.
+5. Watch the first few cycles before leaving it unattended, then enable bait, selling, quests and the webhook one at a time.
 
 ---
 
