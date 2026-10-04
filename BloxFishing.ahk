@@ -300,7 +300,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.24.2"
+APP_VERSION := "1.24.3"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ERR_DIR     := A_ScriptDir "\errors"          ; game screenshots taken when something goes wrong
@@ -2265,10 +2265,12 @@ LeaveDialogue(tries := 4) {
     }
     Wait(ShopCfg.rootSettle)
     Loop tries {
-        if (!Alive() || !InDialogue())
+        if !Alive()
+            return true
+        if (!InDialogue() && StaysClosed())
             return true
         NevermindClick(A_Index)
-        if WaitUntil(() => !InDialogue(), ShopCfg.nevermindRetry)
+        if (WaitUntil(() => !InDialogue(), ShopCfg.nevermindRetry) && StaysClosed())
             return true
         if (MenuPanels().Length >= PageRows("root"))
             Wait(ShopCfg.afterBack)
@@ -2278,13 +2280,30 @@ LeaveDialogue(tries := 4) {
     return !InDialogue()
 }
 
+; The menu is "gone" only if it stays gone: between Back and the root page the button stack
+; vanishes for a moment, which used to look like a closed dialogue (no Nevermind, the macro
+; went fishing with the menu still coming up).
+StaysClosed(secs := 0.9) {
+    end := Now() + secs
+    while (Now() < end) {
+        if InDialogue() {
+            LogMsg("[shop] the menu is still there (page change) - clicking again")
+            return false
+        }
+        Wait(0.15)
+    }
+    return true
+}
+
 LeaveByBottomRow() {
     Loop 5 {
-        if (!Alive() || !InDialogue())
+        if !Alive()
+            return true
+        if (!InDialogue() && StaysClosed())
             return true
         Wait(ShopCfg.pageSettle)
         NevermindClick(A_Index)
-        if WaitUntil(() => !InDialogue(), ShopCfg.nevermindRetry)
+        if (WaitUntil(() => !InDialogue(), ShopCfg.nevermindRetry) && StaysClosed())
             return true
         Wait(ShopCfg.afterBack)
     }

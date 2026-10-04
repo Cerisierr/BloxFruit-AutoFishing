@@ -1,10 +1,19 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.24.2 below).
+Current delivered file: `BloxFishing.ahk` (v1.24.3 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
 
 
 
+
+---
+
+## v1.24.3: Bait purchase - Craft -> Back, then no Nevermind
+
+- **What you saw:** after Craft the macro clicked Back and then went straight back to fishing without clicking Nevermind.
+- **Cause:** between Back and the root menu the button stack disappears for a moment. The macro read that as "dialogue closed" and stopped clicking. This hits most when the bait page and the root page have the same number of rows (Angler: it leaves by clicking the bottom row repeatedly).
+- **Now:** the dialogue counts as closed only if it stays closed for about 0.9 s (new `StaysClosed()`). If the menu comes back, the macro clicks the bottom row again (Nevermind) and logs `[shop] the menu is still there (page change) - clicking again`. Used by both leave routines (`LeaveDialogue`, `LeaveByBottomRow`), so it also covers sales and quest visits.
+- Not tested in the game (I cannot run AutoHotkey here).
 ---
 
 ## v1.24.2: Still "finished" on the 2-bar quest + "Still waitin'" from the Angler
