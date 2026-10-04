@@ -300,7 +300,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.24.1"
+APP_VERSION := "1.24.2"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ERR_DIR     := A_ScriptDir "\errors"          ; game screenshots taken when something goes wrong
@@ -407,7 +407,7 @@ BotState := {
   , npcHits: 0, hpNext: 0.0, hpLostSince: 0.0, hpDead: false, paused: false, stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: [], errAt: Map(), stopShot: ""
   , biteBase: 0, biteBaseN: 0, biteFrame: 0, biteFrameW: 0, biteFrameH: 0
   , questState: "unknown", questType: "", questRarity: "", questTimed: false, questRead: 0.0, questMiss: 0
-  , questNextTry: 0.0, questAcceptedAt: 0.0, questFails: 0, questStreak: 0, questHandFails: 0, questSkillUses: 0, questObjective: "", questEntry: "", questProg: "", questResumed: false, questSig: ""
+  , questNextTry: 0.0, questAcceptedAt: 0.0, questFails: 0, questStreak: 0, questHandFails: 0, questSkillUses: 0, questObjective: "", questEntry: "", questProg: "", questResumed: false, questSig: "", questBlock: 0.0
 }
 Meter := {x: 0, top: 0, bot: 0}
 BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
@@ -3214,6 +3214,8 @@ QuestParse(txt) {
     q.done := (n > 0 && allDone)
     if RegExMatch(t, "i)perfect") {
         q.type := "perfect"
+        if (n < 2)                                       ; two objectives: one counter read = OCR missed a line
+            q.done := false
     } else if RegExMatch(t, "i)skill") {
         q.type := "skill"
     } else if RegExMatch(t, "i)catch\s+(?:an?\s+)?(common|uncommon|rare|epic|legendary|mythic\w*)\s+fish", &rm) {
@@ -3223,6 +3225,12 @@ QuestParse(txt) {
         q.type := "timed"
     }
     return q
+}
+
+; The Angler said "Still waitin' on you to get that task done": the quest is NOT finished, so
+; "done" (bar or OCR) is ignored for a while.
+QuestBlocked() {
+    return Now() < BotState.questBlock
 }
 
 ; Fold what the panel shows into the quest state.
@@ -3259,6 +3267,7 @@ QuestApplyCore(q) {
         BotState.questMiss := 0
         BotState.questState := "none"
         BotState.questProg := ""
+        BotState.questBlock := 0.0
         return
     }
     BotState.questMiss := 0
@@ -3290,7 +3299,9 @@ QuestApplyCore(q) {
         BotState.questType := q.type
         BotState.questRarity := q.rarity
     }
-    if (q.done || st == "done") {
+    if (q.done && QuestBlocked() && InStr(q.prog, "+"))
+        BotState.questBlock := 0.0                       ; every counter really reads n/n: trust it
+    if ((q.done && !QuestBlocked()) || st == "done") {
         if (st != "done")
             LogMsg("[quest] objective complete (" . q.cur . "/" . q.tot . ") - handing it in")
         BotState.questState := "done"
@@ -3333,7 +3344,7 @@ QuestTick() {
         ; Several objectives = several bars (3 perfect casts + 3 perfect reactions): one full bar
         ; does NOT mean the quest is done. Only the OCR counters (all n/n) decide there.
         multi := (BotState.questType == "perfect" || InStr(BotState.questProg, "+"))
-        if (!multi && QuestBarDone()) {
+        if (!multi && !QuestBlocked() && QuestBarDone()) {
             BotState.questState := "done"
             LogMsg("[quest] the progress bar is full - handing the quest in")
             QuestSave(true)
@@ -3439,6 +3450,10 @@ QuestVisitCore(mode) {
             LogMsg("[quest] the Angler says (no buttons): '" . said . "'")
             if RegExMatch(said, "i)any tasks|come back|little bit|right now|nothing for you")
                 cooldown := true
+            if (mode == "turnin" && RegExMatch(said, "i)still wait|waitin|task done|get that")) {
+                BotState.questBlock := Now() + 120
+                LogMsg("[quest] the Angler says the task is NOT done yet - back to the quest (finished signals ignored for 2 min)")
+            }
             AdvanceDialogueText()
             if cooldown
                 break
@@ -3489,11 +3504,16 @@ QuestAfterVisit(mode, accepted, cooldown := false) {
 }
 
 QuestAfterVisitCore(mode, accepted, cooldown := false) {
-    BotState.questState := "none"                        ; the panel now decides
+    BotState.questState := (mode == "turnin" && QuestBlocked()) ? "active" : "none"   ; the panel now decides
     BotState.questMiss := 0
     QuestRead()
     st := BotState.questState
     if (mode == "turnin") {
+        if (QuestBlocked() && (st == "active" || st == "done")) {
+            BotState.questState := "active"
+            BotState.questHandFails := 0
+            return
+        }
         if (st == "done") {
             BotState.questHandFails += 1
             LogMsg("[quest] the quest still shows as finished (hand-in attempt " . BotState.questHandFails . ")")

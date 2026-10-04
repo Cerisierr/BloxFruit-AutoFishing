@@ -1,9 +1,18 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.24.1 below).
+Current delivered file: `BloxFishing.ahk` (v1.24.2 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
 
 
+
+---
+
+## v1.24.2: Still "finished" on the 2-bar quest + "Still waitin'" from the Angler
+
+- **What you saw:** log `active quest: 3 perfect casts + 3 reactions (3/3)` then `objective complete (3/3)`, and the Angler answered "Still waitin' on you to get that task done." OCR had read only one counter (`3/3`), missed `0/3`, and the macro took that for "all done".
+- **Perfect quest:** it has two objectives, so it is now done only when OCR reads at least two counters and all are n/n. One counter read is treated as an OCR miss.
+- **Angler says "Still waitin'..." at the hand-in:** the macro now takes this as "NOT done". The quest goes back to active, the hand-in is not counted as failed or done, and every finished signal (bar or OCR) is ignored for 2 min. For a 2-counter quest the block is lifted early once OCR really reads every counter as n/n. Log: `the Angler says the task is NOT done yet`.
+- Not tested in the game (I cannot run AutoHotkey here).
 ---
 
 ## v1.24.1: "Quest finished" fired too early on the 2-bar quest
