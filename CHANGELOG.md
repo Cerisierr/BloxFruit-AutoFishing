@@ -1,11 +1,20 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.24.3 below).
+Current delivered file: `BloxFishing.ahk` (v1.24.4 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
 
 
 
 
+
+---
+
+## v1.24.4: False chest + false "character dead"
+
+- **What you saw:** a chest was "grabbed" that was not there, the zone left the fish, the reel gave up after 12 s, and then the macro stopped with `[death] HP bar gone for 3 s`.
+- **False chest:** a chest now has to be seen on 4 reads in a row at the same spot and be at most 14 % of the track wide (single orange pixels from the fish or the scenery no longer count). While the zone is still travelling to a chest, if the chest is no longer on the track for 0.8 s it is dropped: `[chest] it is not on the track any more (false chest) - back to the fish`. The 2.5 s hold once the zone sits on a chest is unchanged.
+- **False death:** the HUD (HP bar) is hidden while a gold-banner card is up, such as the catch card "Species / Weight" (your screenshot) or an NPC speech, and the old check took "no green bar for 3 s" as dead. Now death means the Health text reads **0/x**: when the bar has no green fill, the Health text is read with OCR once a second, and two reads in a row of 0/x stop the macro (`[death] Health reads 0/x - character is dead, stopping`). A hidden HUD has no text, so it is never a death.
+- Not tested in the game (I cannot run AutoHotkey here).
 ---
 
 ## v1.24.3: Bait purchase - Craft -> Back, then no Nevermind

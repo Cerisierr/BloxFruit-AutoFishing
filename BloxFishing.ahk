@@ -300,7 +300,7 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.24.3"
+APP_VERSION := "1.24.4"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
 ERR_DIR     := A_ScriptDir "\errors"          ; game screenshots taken when something goes wrong
@@ -404,7 +404,7 @@ BotState := {
   , atNpc: true, bait: -1, sinceSell: 0, lastResponse: 0.0, witness: ""
   , flicked: false, lastEscaped: false, buyFailures: 0, lastBought: 0
   , meterFull: 0, biteInfo: "", zoomedAt: -1, biteMisses: 0
-  , npcHits: 0, hpNext: 0.0, hpLostSince: 0.0, hpDead: false, paused: false, stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: [], errAt: Map(), stopShot: ""
+  , npcHits: 0, hpNext: 0.0, hpLostSince: 0.0, hpDead: false, hpOcrNext: 0.0, hpZeroReads: 0, paused: false, stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: [], errAt: Map(), stopShot: ""
   , biteBase: 0, biteBaseN: 0, biteFrame: 0, biteFrameW: 0, biteFrameH: 0
   , questState: "unknown", questType: "", questRarity: "", questTimed: false, questRead: 0.0, questMiss: 0
   , questNextTry: 0.0, questAcceptedAt: 0.0, questFails: 0, questStreak: 0, questHandFails: 0, questSkillUses: 0, questObjective: "", questEntry: "", questProg: "", questResumed: false, questSig: "", questBlock: 0.0
@@ -532,8 +532,8 @@ Alive(hp := false) {
     }
     ; hp = true only inside the fishing loops (the HP bar is hidden during NPC dialogues)
     if (hp && HealthLost()) {
-        LogMsg("[death] HP bar gone for 3 s - character is dead, stopping")
-        Halt("character dead (HP bar gone)")
+        LogMsg("[death] Health reads 0/x - character is dead, stopping")
+        Halt("character dead (Health 0)")
         return false
     }
     return true
@@ -566,14 +566,41 @@ HealthLost() {
         y += 4
     }
     if (total > 0 && green / total < 0.03) {
-        if (BotState.hpLostSince == 0.0)
-            BotState.hpLostSince := Now()
-        BotState.hpDead := (Now() - BotState.hpLostSince >= 3.0)
+        ; No green fill: only a Health text of 0/x counts as dead. When the HUD is hidden (catch card,
+        ; NPC speech) there is no Health text at all, which is not a death.
+        if (Now() >= BotState.hpOcrNext) {
+            BotState.hpOcrNext := Now() + 1.0
+            if HealthTextZero() {
+                BotState.hpZeroReads += 1
+                if (BotState.hpZeroReads == 1)
+                    LogMsg("[death] Health reads 0 - checking again")
+            } else {
+                BotState.hpZeroReads := 0
+            }
+        }
+        BotState.hpDead := (BotState.hpZeroReads >= 2)
     } else {
-        BotState.hpLostSince := 0.0
+        BotState.hpZeroReads := 0
         BotState.hpDead := false
     }
     return BotState.hpDead
+}
+
+; OCR of the Health bar text ("Health 0/2345"): true when the current value is 0.
+HealthTextZero() {
+    r := SubRect(BotState.win, Regions.health)
+    path := TMP_DIR . "\hp.png"
+    if !PngSave(r.x, r.y, r.w, r.h, path)
+        return false
+    raw := OcrFile(path)
+    if RegExMatch(raw, "^ERR:")
+        return false
+    t := RegExReplace(raw, "\s+", " ")
+    if !RegExMatch(t, "([\dOo][\d,.OoIl]*)\s*/\s*(\d[\d,.]*)", &m)
+        return false
+    cur := RegExReplace(StrReplace(StrReplace(m[1], "O", "0"), "o", "0"), "\D")
+    mx := RegExReplace(m[2], "\D")
+    return (cur != "" && mx != "" && Integer(cur) == 0 && Integer(mx) > 0)
 }
 
 NoteResponse() {
@@ -2863,6 +2890,7 @@ Reel(spend := true) {
     chestMinW := Cfg.chest ? Floor(0.035 * tw) : 0
     chestUntil := 0.0, chestAt := -1.0, chestOn := false
     chestDone := []
+    chestSeen := 0, chestSeenX := -1.0, chestGoneSince := 0.0
     progress := -1.0
     lostSince := 0.0
     stalling := false
@@ -2939,12 +2967,20 @@ Reel(spend := true) {
             chestOn := false
         } else if (Cfg.chest && st.cl >= 0 && chestDone.Length < Timing.chestMaxGrabs) {
             cx := ((st.cl + st.cr) / 2) / tw
+            cw := (st.cr - st.cl) / tw
+            ; A real chest is a small tile that stays put: seen on 4 reads in a row at the same spot,
+            ; and not wider than 14 % of the track. One-off orange pixels (fish, scenery) are ignored.
+            if (chestSeenX >= 0 && Abs(cx - chestSeenX) <= 0.03)
+                chestSeen++
+            else
+                chestSeen := 1
+            chestSeenX := cx
             fresh := true
             for d0 in chestDone {
                 if (Abs(cx - d0) <= 0.03)
                     fresh := false
             }
-            if (fresh && (progress < 0 || progress >= Timing.chestMinProgress)) {
+            if (fresh && chestSeen >= 4 && cw <= 0.14 && (progress < 0 || progress >= Timing.chestMinProgress)) {
                 chestAt := cx
                 chestOn := false
                 chestUntil := tn + Timing.chestHold + Timing.chestGrace
@@ -2953,6 +2989,29 @@ Reel(spend := true) {
                 LogMsg("[chest] grabbing at " . Round(cx, 2))
                 target := cx
             }
+        } else {
+            chestSeen := 0
+            chestSeenX := -1.0
+        }
+        ; Before the zone reaches it: if the chest is not on the track any more it was a false chest
+        ; (or it already went), so go back to the fish. Once the zone sits on it, the normal hold applies.
+        if (chestUntil > 0.0 && tn < chestUntil && chestAt >= 0 && !chestOn) {
+            if (st.cl >= 0 && Abs(((st.cl + st.cr) / 2) / tw - chestAt) <= 0.06) {
+                chestGoneSince := 0.0
+            } else {
+                if (chestGoneSince == 0.0)
+                    chestGoneSince := tn
+                if (tn - chestGoneSince >= 0.8) {
+                    LogMsg("[chest] it is not on the track any more (false chest) - back to the fish")
+                    chestUntil := 0.0
+                    chestAt := -1.0
+                    chestGoneSince := 0.0
+                    reelCtl.Retarget()
+                    target := fishC
+                }
+            }
+        } else {
+            chestGoneSince := 0.0
         }
 
         d := reelCtl.Step(tn, zoneC, target, zoneHalf)

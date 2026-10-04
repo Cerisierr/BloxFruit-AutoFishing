@@ -4,15 +4,15 @@ AutoHotkey v2 macro for automating fishing in **Blox Fruits**.
 
 The macro uses screen capture, color detection and Windows OCR to read the fishing bar, the bite indicator, the fish position, chests, the cast charge meter, NPC/shop menus and the quest panel. It controls the reel automatically and can buy bait, sell fish, do the Angler quests and report to Discord.
 
-Current version: **1.24.3** (see `CHANGELOG.md` for the full history).
+Current version: **1.24.4** (see `CHANGELOG.md` for the full history).
 
 ## Features
 
 - Automatic casting (optional **Perfect cast**), bite detection and reel controller
-- Treasure chest collection during the minigame
+- Treasure chest collection during the minigame (a chest must be seen on several reads in a row, so false chests are ignored)
 - Auto-buy bait and auto-sell fish at the NPC (live bait counter, income and level tracking)
 - **Auto-quest at the Angler** (all four quest types, survives a restart)
-- Death detection, re-anchoring after a missed bite, safety stops with a game screenshot
+- Death detection (the Health text reads 0/x), re-anchoring after a missed bite, safety stops with a game screenshot
 - Discord webhook: live messages, hourly report with an image card, quest messages, error alerts
 - GUI with a dashboard, a live activity log and several color themes
 - Pause / resume without losing the session
@@ -172,6 +172,8 @@ Repeat
 
 If something goes wrong, the macro has several recovery checks and stops itself when it cannot safely confirm the game state.
 
+**Death check:** the macro only stops for a dead character when the Health text reads `0/x` (OCR, two reads in a row). A hidden HUD, for example while the catch card is on screen, is not a death.
+
 ## Automatic detection
 
 The macro uses screen capture and color detection for: fishing bar, green reel zone, fish position, treasure chests, bite indicator, cast charge meter, NPC dialogue panels, craft button, recipe `Learn` button, fishing progress and the quest panel. It also uses Windows OCR for the quest text, money, level and bait count.
@@ -257,6 +259,15 @@ Fixed in 1.24.1 / 1.24.2. If it still happens, send the `[quest] progress:` and 
 
 **The quest is not recognised**
 Send the `[quest] UNKNOWN quest text` log line and a screenshot of the quest panel and the dialogue.
+
+**The macro stopped with "character dead" but the character is alive**
+Fixed in 1.24.4: death now needs the Health text to read `0/x`. If it still happens, send the `[death]` log lines and the screenshot from the `errors` folder.
+
+**A chest was grabbed that was not there**
+Fixed in 1.24.4: a chest must be seen on 4 reads in a row, and the macro goes back to the fish if it disappears. If it still happens, send the `[chest]` and `[reel]` log lines.
+
+**After buying bait the menu stays open / no Nevermind**
+Fixed in 1.24.3: the menu counts as closed only if it stays closed for about 0.9 s.
 
 **Something stopped the macro**
 Look in the `errors` folder for the game screenshot taken at the moment of the problem (it is also sent to Discord when **Errors + game screenshot** is on).
