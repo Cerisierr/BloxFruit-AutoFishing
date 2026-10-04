@@ -43,7 +43,7 @@ Current version: **1.24.2** (see `CHANGELOG.md` for the full history).
 
 The macro enables and verifies Shift Lock by itself when it starts fishing.
 
-## Critical: stand at the NPC, right on the edge of the interaction range
+## ⚠️ stand at the NPC, right on the edge of the interaction range
 
 **Required.** Your character must be at the outer edge of the Fisherman's interaction circle and lined up at 0°: directly in front of or directly behind the NPC, on one straight line through its centre. Do not start from a diagonal angle. This lets the game's push return you to the same edge instead of drifting sideways.
 
@@ -57,9 +57,6 @@ The macro enables and verifies Shift Lock by itself when it starts fishing.
 
 Too close can reopen the dialogue while casting; too far makes the anchor fail. Starting even slightly diagonal means the game's outward push can land you on another edge. Repeating the same backward movement from that wrong edge compounds the angle until the macro can miss the NPC.
 
-**Done looks like**
-
-F2 opens and closes the NPC dialogue once. After the game's push, you remain on the same straight 0° lane at the fishing position, so the rod can cast without reopening dialogue.
 
 **Reference image**
 
