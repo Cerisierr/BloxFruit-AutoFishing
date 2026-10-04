@@ -1,7 +1,64 @@
 # Changelog: Blox Fruits Fishing Macro (AutoHotkey v2)
 
-Current delivered file: `BloxFishing.ahk` (v1.20.0 below).
+Current delivered file: `BloxFishing.ahk` (v1.24.1 below).
 Nothing is pending from the earlier "not delivered" list except the open points at the bottom.
+
+
+---
+
+## v1.24.1: "Quest finished" fired too early on the 2-bar quest
+
+- **What you saw (screenshot):** "Perform 3 Perfect Casts 0/3" + "Perform 3 Perfect Reactions 3/3". The reactions bar was full, so the macro logged "the progress bar is full - handing the quest in" while the casts were still 0/3.
+- **Cause:** the pixel scan (`QuestBarDone`) returns true as soon as ANY bar in the quest panel is full.
+- **Now:** for the perfect-casts quest (or any panel with several counters, `a/b + c/d`) the bar scan is skipped. The quest is done only when OCR reads every counter as n/n. For that quest the panel is read every 10 s instead of 45 s.
+- Single-bar quests are unchanged.
+- Not tested in the game (I cannot run AutoHotkey here).
+---
+
+## v1.24.0: Stop / error messages no longer carry the hourly report
+
+- **What you saw:** stopping the macro (or an error stop) posted "Macro stopped / Stopped manually. Session summary:" with the same image card as the hourly report, in the normal webhook channel.
+- **Now:** the stop and error messages are plain text embeds (run time, fish, money, bait, net profit, casts, levels, quests) and go to the normal webhook only. The hourly report image card is sent only when the hour is up (or with "Send report now"), and only to the **hourly report webhook URL** (the normal one if that field is empty).
+- **Error stops:** one message "Macro stopped - needs attention" with the reason, the summary, the last 8 log lines and the game screenshot attached (before, the screenshot came as a second message and the card as a third). Start-up failures work the same way.
+- Not tested on Discord (I cannot run AutoHotkey here).
+
+---
+
+## v1.23.0: The quest survives a restart + the quest objectives are really done
+
+- **Stop / restart during a quest:** the quest state is now saved in `BloxFishing.ini` (`[quest]`: state, type, rarity, timed, progress, panel text, accept time, next-ask time). On start the macro reads it back (`[quest] resuming the quest from the last session: ...`), keeps fishing for it and does NOT ask the Angler for a new one. The quest panel is checked at the first tick: if it is still there the quest continues; if it is gone (two empty reads in a row) the macro logs that the quest ended while it was stopped (no "failed" message, not counted) and goes on. A saved quest older than 12 h is ignored.
+- **The 15 min cooldown also survives a restart:** the next-ask time is saved, so a restart does not ask the Angler again right away.
+- **First read at start:** an empty first read of the quest panel is repeated once after 2 s before the macro decides there is no quest (it used to trust one OCR miss).
+- **Quest progress:** all counters of the panel are read (`1/3 + 0/3`), written to the log as `[quest] progress: ...` when they change, and shown on the Dashboard / Quest tab.
+- **"3 perfect casts + 3 perfect reactions" is now really done:** while this quest is active the macro forces Perfect cast ON (whatever the switch says), releases at least at 97 % (or your setting if higher), and forces the fast bite reaction. The cast log line ends with `[perfect-cast quest]`. The fast bite reaction is also forced during the "3 fish within 2:05" quest.
+- Not tested in the game (I cannot run AutoHotkey here).
+
+---
+
+## v1.22.0: Angler cooldown message + game screenshot on every error
+
+- **"I don't have any tasks for you right now, come back in a little bit." (your screenshot):** this is the Angler telling us the 15 min cooldown is still running (the previous quest was already done). It is a text-only box (no buttons), so before this version the macro clicked it away *before* reading it and then treated it as "nothing to accept". Now the text is read first (OCR, after a 0.7 s wait for the typing), logged as `[quest] the Angler says (no buttons): '...'`, then clicked away. If it matches (any tasks / come back / little bit / right now), the macro asks again when the cooldown ends: 15 min after the last accept, never later than 15 min from now, never sooner than 60 s (5 min if the accept time is unknown, e.g. a restart). This is not counted as a failed visit and does not grow the 60/120/... s retry delay.
+- **Game screenshot on every problem:** the whole game window is saved in the new `errors` folder next to the script (`err_<date>_<time>_<tag>.png`, the newest 40 are kept) and sent to Discord with the error message, the run time, and the last 8 log lines. It uses the **Errors + game screenshot** toggle (Webhook page). The log prints `[error] game screenshot saved: <path>`. Triggers:
+  - every safety stop (`Halt`), taken at the moment of the stop;
+  - a failed shop / bait / quest visit (taken BEFORE the recovery moves the screen);
+  - a cycle error (at most one per 60 s);
+  - start-up failure (anchor / Shift Lock);
+  - a quest that failed (attached to the "Quest failed" message too);
+  - an unknown quest text, a quest page that is not the offer, "Yes" answered but no quest panel (at most one per 60-120 s each).
+- Not tested in the game or on Discord (I cannot run AutoHotkey here).
+
+---
+
+## v1.21.0: Quest webhooks + quests in the hourly report
+
+- **Three quest webhooks** (toggles on the **Quest** tab, "DISCORD" section; the old "Quest accepted / done" toggle on the Webhook page moved there):
+  - **Quest accepted:** the quest to do (label, the quest-panel text as read by OCR, normal/timed, next quest in ~15 min, session counts).
+  - **Quest finished:** quest, time taken, session counts.
+  - **Quest failed:** the quest panel vanished before the objective was complete (timed out or abandoned), the hand-in did not register after 3 tries, or auto-quest was switched off after 3 failed visits. Shows the reason and how long it was open.
+- **Hourly report:** the text report has a "Quests" field (accepted / done / failed) and a "Quests this hour" list (`[done]`, `[failed]`, `[ongoing]` + label). The image card has a new full-width **QUESTS** panel (accepted / done / failed counts + the last 3 quests) and is now 1000x830. The stop summary also has the Quests line.
+- New counters: `questsAcc`, `questsFail` (session + hourly window). New ini keys `[webhook] hkQuestDone`, `hkQuestFail` (default on).
+- A quest that is already open when the macro starts is also tracked and reported when it ends.
+- Not tested in the game or on Discord (I cannot run AutoHotkey here).
 
 ---
 

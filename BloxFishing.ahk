@@ -300,9 +300,10 @@ class ReelController {
 ;  CONFIGURATION
 ; ============================================================================
 APP_NAME    := "Blox Fruits Fishing Macro"
-APP_VERSION := "1.20.0"
+APP_VERSION := "1.24.1"
 INI_FILE    := A_ScriptDir "\BloxFishing.ini"
 LOG_FILE    := A_ScriptDir "\BloxFishing.log"
+ERR_DIR     := A_ScriptDir "\errors"          ; game screenshots taken when something goes wrong
 ROBLOX_WIN  := "ahk_exe RobloxPlayerBeta.exe"
 
 ; Supported screen resolutions (profile dropdown).
@@ -392,7 +393,7 @@ Cfg := {
   , hkOn: false, hkUrl: "", hkUrlHourly: "", hkName: "Blox Fishing Macro", hkMention: ""
   , hkStart: true, hkStop: true, hkSale: true, hkShot: true, hkBait: true
   , hkHourly: true, hkEveryMin: 60, hkErr: true
-  , hkBuy: true, hkCast: false, hkCatch: true, hkCatchShot: false, hkChest: true, hkQuest: true
+  , hkBuy: true, hkCast: false, hkCatch: true, hkCatchShot: false, hkChest: true, hkQuest: true, hkQuestDone: true, hkQuestFail: true
 }
 
 ; Runtime state.
@@ -403,15 +404,15 @@ BotState := {
   , atNpc: true, bait: -1, sinceSell: 0, lastResponse: 0.0, witness: ""
   , flicked: false, lastEscaped: false, buyFailures: 0, lastBought: 0
   , meterFull: 0, biteInfo: "", zoomedAt: -1, biteMisses: 0
-  , npcHits: 0, hpNext: 0.0, hpLostSince: 0.0, hpDead: false, paused: false, stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: []
+  , npcHits: 0, hpNext: 0.0, hpLostSince: 0.0, hpDead: false, paused: false, stopReason: "", moneyLast: -1, lastOcr: "", logBuf: "", levelStart: -1, levelLast: -1, levelRead: 0.0, reportDue: false, hookQ: [], errAt: Map(), stopShot: ""
   , biteBase: 0, biteBaseN: 0, biteFrame: 0, biteFrameW: 0, biteFrameH: 0
   , questState: "unknown", questType: "", questRarity: "", questTimed: false, questRead: 0.0, questMiss: 0
-  , questNextTry: 0.0, questAcceptedAt: 0.0, questFails: 0, questStreak: 0, questHandFails: 0, questSkillUses: 0
+  , questNextTry: 0.0, questAcceptedAt: 0.0, questFails: 0, questStreak: 0, questHandFails: 0, questSkillUses: 0, questObjective: "", questEntry: "", questProg: "", questResumed: false, questSig: ""
 }
 Meter := {x: 0, top: 0, bot: 0}
 BotStats := {casts: 0, bites: 0, catches: 0, escapes: 0, missedBar: 0
            , biteTimeouts: 0, sales: 0, purchases: 0, baitBought: 0, spent: 0
-           , income: 0, unreadable: 0, levels: 0, chests: 0, quests: 0, started: 0.0, lastUp: 0.0}
+           , income: 0, unreadable: 0, levels: 0, chests: 0, quests: 0, questsAcc: 0, questsFail: 0, started: 0.0, lastUp: 0.0}
 Hour :={started: 0.0}                                  ; counters since the last hourly report
 PrevHour := {valid: false, secs: 0.0, catches: 0, income: 0, levels: 0}   ; the report window before this one (for the comparison)
 ; Remote Desktop session. Everything added for RDP in v1.18.x is gated by Rdp.on, so
@@ -582,9 +583,87 @@ NoteResponse() {
 ; Stop the run from inside the engine and remember why (shown in the webhook).
 Halt(reason) {
     BotState.running := false
-    if (BotState.stopReason == "")
+    first := (BotState.stopReason == "")
+    if first
         BotState.stopReason := reason
     LogMsg("[stop] " . reason)
+    if first {
+        BotState.stopShot := ErrorShot("stop")           ; attached to the "Macro stopped" message
+        if (BotState.stopShot != "")
+            LogMsg("[error] game screenshot saved: " . BotState.stopShot)
+    }
+}
+
+; Screenshot of the whole game window, saved in the errors folder (kept: the newest 40).
+; minGap > 0: the same tag is not captured again within that many seconds ("" is returned).
+ErrorShot(tag, minGap := 0) {
+    try {
+        t := Now()
+        if (minGap > 0 && BotState.errAt.Has(tag) && t - BotState.errAt[tag] < minGap)
+            return ""
+        BotState.errAt[tag] := t
+        win := BotState.win
+        if !IsObject(win) {
+            RefreshGame()
+            win := BotState.win
+        }
+        if !IsObject(win)
+            return ""
+        DirCreate(ERR_DIR)
+        path := ERR_DIR . "\err_" . FormatTime(, "yyyyMMdd_HHmmss") . "_" . RegExReplace(tag, "[^\w-]", "") . ".png"
+        if !PngSave(win.x, win.y, win.w, win.h, path)
+            return ""
+        names := []
+        Loop Files, ERR_DIR . "\err_*.png"
+            names.Push(A_LoopFileName)
+        if (names.Length > 40) {
+            names := StrSplit(Sort(StrJoin(names, "`n")), "`n")
+            Loop names.Length - 40
+                try FileDelete(ERR_DIR . "\" . names[A_Index])
+        }
+        return path
+    }
+    return ""
+}
+
+StrJoin(arr, sep) {
+    out := ""
+    for v in arr
+        out .= (A_Index > 1 ? sep : "") . v
+    return out
+}
+
+; Something went wrong: screenshot the game, log where it was saved, post it to Discord.
+ReportError(tag, title, desc, minGap := 0) {
+    shot := ErrorShot(tag, minGap)
+    if (shot == "")
+        return ""
+    LogMsg("[error] game screenshot saved: " . shot)
+    HookError(title, desc, shot)
+    return shot
+}
+
+; The last few log lines, for the error message.
+LogTail(n := 8) {
+    lines := StrSplit(RTrim(BotState.logBuf, "`r`n"), "`n", "`r")
+    from := Max(1, lines.Length - n + 1)
+    out := ""
+    i := from
+    while (i <= lines.Length) {
+        out .= (out != "" ? "`n" : "") . lines[i]
+        i++
+    }
+    return SubStr(out, -900)
+}
+
+HookError(title, desc, shot := "") {
+    if !(HookReady() && Cfg.hkErr)
+        return
+    useShot := (shot != "" && FileExist(shot))
+    f := [["Run time", FmtDur(Now() - BotStats.started)], ["Fish caught", Fmt(BotStats.catches)]
+        , ["Last log lines", LogTail(8), false]]
+    HookPost(EmbedJson(title, desc, 0xF87171, f, useShot ? "error.png" : ""), useShot ? shot : ""
+        , , "error", "error.png")
 }
 
 ; Count into both the session totals and the current hourly-report window.
@@ -595,8 +674,9 @@ Tally(field, n := 1) {
 
 ResetHour() {
     for k in ["casts", "catches", "escapes", "sales", "purchases", "baitBought", "spent"
-            , "income", "unreadable", "levels", "chests", "quests", "bites", "missedBar", "biteTimeouts"]
+            , "income", "unreadable", "levels", "chests", "quests", "questsAcc", "questsFail", "bites", "missedBar", "biteTimeouts"]
         Hour.%k% := 0
+    Hour.qlog := []
     Hour.started := Now()
 }
 
@@ -2327,6 +2407,7 @@ EstablishAnchorCore() {
 }
 
 ShopFail(why, what) {
+    ReportError(what . "-fail", "Problem: " . what . " failed", why, 20)   ; screenshot BEFORE the recovery moves the screen
     ds := DialogueState()
     LogMsg("[" . what . "] FAILED: " . why . " (screen: panels=" . ds.panels . " banner=" . (ds.header ? 1 : 0)
         . " craft=" . (CraftUp() ? 1 : 0) . ")")
@@ -2574,9 +2655,10 @@ DoCast() {
     ; (fills, then drains again), so it is measured against the track height every
     ; tick and released the moment it reaches the threshold on the way up. If the
     ; first rise is missed, it simply waits for the next one (up to castHold s).
-    if !Cfg.perfect
+    perfectMode := PerfectOn()
+    if !perfectMode
         return DoQuickCast()
-    thr := Min(100, Max(60, Cfg.perfectPct)) / 100.0
+    thr := Min(100, Max(QuestPerfectActive() ? 97 : 60, Cfg.perfectPct)) / 100.0
     lead := Timing.releaseLead                           ; RDP shows the bar late: look ahead by that delay
     if (Rdp.on && lead <= 0)
         lead := Rdp.castLead
@@ -2599,7 +2681,7 @@ DoCast() {
                 lost := 0
                 charged := true
                 level := lv
-                if !Cfg.perfect {                        ; classic: hold a beat, release
+                if !perfectMode {                        ; classic: hold a beat, release
                     Wait(Min(0.15, Timing.castHold))
                     break
                 }
@@ -2637,15 +2719,16 @@ DoCast() {
         MeterReset()
 
         if charged {
-            if Cfg.perfect
+            if perfectMode
                 LogMsg("[cast] released at " . Round(level * 100) . "% (peak " . Round(peak * 100)
                     . "%) after " . Round(elapsed, 2) . " s"
                     . (perfect ? (byPlateau ? " - bar saturated" : " - top reached")
-                               : " - never reached " . Round(thr * 100) . "%, released anyway"))
+                               : " - never reached " . Round(thr * 100) . "%, released anyway")
+                    . (QuestPerfectActive() ? "  [perfect-cast quest]" : ""))
             BotState.npcHits := 0
             Tally("casts")
             LogMsg("[cast] #" . BotStats.casts . (attempt == 1 ? "" : " (attempt " . attempt . ")"))
-            HookCast(Cfg.perfect ? Round(level * 100) : -1)
+            HookCast(perfectMode ? Round(level * 100) : -1)
             Wait(Timing.castSettle)
             return true
         }
@@ -3009,7 +3092,7 @@ QuestLabel() {
 QuestShort() {
     switch BotState.questState {
         case "active":
-            return "Quest: " . QuestLabel()
+            return "Quest: " . QuestLabel() . (BotState.questProg != "" ? "  (" . BotState.questProg . ")" : "")
         case "done":
             return "Quest: handing in"
         case "none":
@@ -3023,9 +3106,19 @@ QuestTimedActive() {
     return QuestOn() && BotState.questState == "active" && BotState.questTimed
 }
 
+; "3 perfect casts" quest: the charge meter is read and released at the top, whatever the
+; Perfect cast setting is.
+QuestPerfectActive() {
+    return QuestOn() && BotState.questState == "active" && BotState.questType == "perfect"
+}
+
+PerfectOn() {
+    return Cfg.perfect || QuestPerfectActive()
+}
+
 ; "Perfect reaction" quest: react to the bite as fast as the Fast bite mode does.
 FastBiteOn() {
-    return Cfg.fastBite || (QuestOn() && BotState.questState == "active" && BotState.questType == "perfect")
+    return Cfg.fastBite || QuestPerfectActive() || QuestTimedActive()
 }
 
 QuestSkillWanted() {
@@ -3095,7 +3188,7 @@ QuestBarDone() {
 ; OCR text of the quest panel -> {active, done, timed, type, rarity, cur, tot, text}.
 QuestParse(txt) {
     t := RegExReplace(txt, "\s+", " ")
-    q := {active: false, done: false, timed: false, type: "other", rarity: "", cur: 0, tot: 0, text: t}
+    q := {active: false, done: false, timed: false, type: "other", rarity: "", cur: 0, tot: 0, text: t, prog: ""}
     if !RegExMatch(t, "i)trust|catch|within|remain|perfect|skill|deliver|fishin")
         return q
     q.active := true
@@ -3110,6 +3203,7 @@ QuestParse(txt) {
         if (tt < 1 || tt > 20)
             continue
         n++
+        q.prog .= (q.prog != "" ? " + " : "") . c . "/" . tt
         if (n == 1) {
             q.cur := c
             q.tot := tt
@@ -3133,28 +3227,65 @@ QuestParse(txt) {
 
 ; Fold what the panel shows into the quest state.
 QuestApply(q) {
+    QuestApplyCore(q)
+    QuestSave()
+}
+
+QuestApplyCore(q) {
     st := BotState.questState
     if !q.active {
+        if (BotState.questResumed && (st == "active" || st == "done")) {
+            BotState.questMiss += 1
+            if (BotState.questMiss < 2)
+                return
+            LogMsg("[quest] the quest saved from the last session is not on the panel any more (finished or expired while the macro was stopped)")
+            QuestEntryDrop()
+            BotState.questResumed := false
+            BotState.questMiss := 0
+            BotState.questState := "none"
+            BotState.questProg := ""
+            return
+        }
         if (st == "active" || st == "done") {
             BotState.questMiss += 1                      ; one empty read may be an OCR miss
             if (BotState.questMiss < 2)
                 return
             LogMsg("[quest] the quest panel is gone - the quest is over (handed in, timed out or abandoned)")
+            if (st == "active")
+                QuestEnded("failed", "The quest panel disappeared before the objective was complete (timed out or abandoned).")
+            else
+                QuestEnded("done", "The objective was complete and the quest panel is gone.")
         }
         BotState.questMiss := 0
         BotState.questState := "none"
+        BotState.questProg := ""
         return
     }
     BotState.questMiss := 0
+    if BotState.questResumed {
+        BotState.questResumed := false
+        LogMsg("[quest] the quest saved from the last session is still on the panel - continuing it: " . QuestLabel())
+    }
+    if (q.prog != BotState.questProg) {
+        BotState.questProg := q.prog
+        if (q.prog != "")
+            LogMsg("[quest] progress: " . q.prog)
+    }
     BotState.questTimed := q.timed
+    if (q.type != "other" || BotState.questObjective == "")
+        BotState.questObjective := SubStr(q.text, 1, 180)
     if (st != "active" && st != "done") {
         BotState.questSkillUses := 0
         BotState.questType := q.type
         BotState.questRarity := q.rarity
         LogMsg("[quest] active quest: " . QuestLabel() . (q.tot > 0 ? "  (" . q.cur . "/" . q.tot . ")" : "")
             . (q.timed ? "  - timed" : ""))
-        if (q.type == "other")
-            LogMsg("[quest] UNKNOWN quest text (send this line + a screenshot): '" . SubStr(RegExReplace(q.text, "\s+", " "), 1, 200) . "'")
+        QuestEntryOpen()
+        if (q.type == "other") {
+            utxt := SubStr(RegExReplace(q.text, "\s+", " "), 1, 200)
+            LogMsg("[quest] UNKNOWN quest text (send this line + the screenshot): '" . utxt . "'")
+            ReportError("quest-unknown", "Unknown quest", "The macro does not know this quest. Panel text: " . utxt, 120)
+        }
     } else if (q.type != "other" && q.type != BotState.questType) {
         BotState.questType := q.type
         BotState.questRarity := q.rarity
@@ -3192,15 +3323,23 @@ QuestTick() {
     st := BotState.questState
     if (st == "unknown") {
         QuestRead()
+        if (BotState.questState == "none") {             ; one empty first read may be an OCR miss: look again
+            Wait(2.0)
+            QuestRead()
+        }
         return
     }
     if (st == "active") {
-        if QuestBarDone() {
+        ; Several objectives = several bars (3 perfect casts + 3 perfect reactions): one full bar
+        ; does NOT mean the quest is done. Only the OCR counters (all n/n) decide there.
+        multi := (BotState.questType == "perfect" || InStr(BotState.questProg, "+"))
+        if (!multi && QuestBarDone()) {
             BotState.questState := "done"
             LogMsg("[quest] the progress bar is full - handing the quest in")
+            QuestSave(true)
             return
         }
-        if (Now() - BotState.questRead >= (BotState.questTimed ? 20 : 45))
+        if (Now() - BotState.questRead >= (BotState.questTimed ? 20 : (multi ? 10 : 45)))
             QuestRead()
     }
 }
@@ -3226,8 +3365,10 @@ QuestDialogText() {
 QuestFail(why) {
     BotState.questFails += 1
     BotState.questNextTry := Now() + 60
-    if (BotState.questFails >= 3)
+    if (BotState.questFails >= 3) {
         LogMsg("[quest] 3 failed visits in a row - auto-quest is off until the macro is restarted")
+        HookQuestFail("Auto-quest", "3 failed visits to the Angler in a row (" . why . "). Auto-quest is off until the macro is restarted.")
+    }
     return ShopFail(why, "quest")
 }
 
@@ -3278,6 +3419,7 @@ QuestVisitCore(mode) {
     Wait(1.8)                                            ; let the answer text appear
 
     offered := false
+    cooldown := false
     deadline := Now() + 8.0
     while (Alive() && Now() < deadline) {
         n := MenuPanels().Length
@@ -3290,15 +3432,25 @@ QuestVisitCore(mode) {
             if WaitMenuPage("root", 1.6)
                 break                                    ; back on the Angler menu: nothing more to answer
         } else if (n < 2 && DialogueHeader()) {
-            AdvanceDialogueText(1)                       ; text-only answer (hand-in thanks, etc.): click it away
+            ; Text-only answer. Read it BEFORE clicking it away. "I don't have any tasks for you
+            ; right now, come back in a little bit." = the 15 min cooldown is still running.
+            Wait(0.7)                                    ; let the text finish typing
+            said := QuestDialogText()
+            LogMsg("[quest] the Angler says (no buttons): '" . said . "'")
+            if RegExMatch(said, "i)any tasks|come back|little bit|right now|nothing for you")
+                cooldown := true
+            AdvanceDialogueText()
+            if cooldown
+                break
         }
         Wait(0.15)
     }
     if !Alive()
         return false
 
-    txt := QuestDialogText()
-    LogMsg("[quest] the Angler says: '" . txt . "'" . (offered ? "  (Yes / No / Back page)" : "  (no answer page)"))
+    txt := cooldown ? "" : QuestDialogText()
+    if !cooldown
+        LogMsg("[quest] the Angler says: '" . txt . "'" . (offered ? "  (Yes / No / Back page)" : "  (no answer page)"))
     accepted := false
     if offered {
         isOffer := RegExMatch(txt, "i)lookin|do something|something for me") ? true : false
@@ -3312,6 +3464,7 @@ QuestVisitCore(mode) {
             AdvanceDialogueText()                        ; the quest line must be clicked or the dialogue stays stuck
         } else {
             LogMsg("[quest] this is not the quest offer (maybe an abandon prompt) - NOT answering, backing out")
+            ReportError("quest-notoffer", "Quest page not recognised", "The Angler page was not the quest offer: '" . txt . "'", 60)
         }
     }
 
@@ -3325,12 +3478,17 @@ QuestVisitCore(mode) {
     EnterFishingStance(true)
     NoteResponse()
     Wait(1.0)
-    QuestAfterVisit(mode, accepted)
+    QuestAfterVisit(mode, accepted, cooldown)
     return true
 }
 
 ; Read the quest panel again and decide what the visit achieved.
-QuestAfterVisit(mode, accepted) {
+QuestAfterVisit(mode, accepted, cooldown := false) {
+    QuestAfterVisitCore(mode, accepted, cooldown)
+    QuestSave(true)
+}
+
+QuestAfterVisitCore(mode, accepted, cooldown := false) {
     BotState.questState := "none"                        ; the panel now decides
     BotState.questMiss := 0
     QuestRead()
@@ -3341,6 +3499,7 @@ QuestAfterVisit(mode, accepted) {
             LogMsg("[quest] the quest still shows as finished (hand-in attempt " . BotState.questHandFails . ")")
             if (BotState.questHandFails >= 3) {
                 LogMsg("[quest] giving up on this hand-in - clearing it")
+                QuestEnded("failed", "The hand-in did not register after 3 tries.")
                 BotState.questHandFails := 0
                 BotState.questState := "none"
                 BotState.questNextTry := Now() + 120
@@ -3350,7 +3509,21 @@ QuestAfterVisit(mode, accepted) {
         BotState.questHandFails := 0
         Tally("quests")
         LogMsg("[quest] quest handed in (" . BotStats.quests . " this session)")
-        HookQuest("Quest completed", "The Angler quest was handed in.")
+        QuestEntryOpen()
+        e := BotState.questEntry
+        e.status := "done"
+        took := Now() - e.t
+        inList := false
+        for x in Hour.qlog {
+            if (x == e) {
+                inList := true
+                break
+            }
+        }
+        if !inList
+            Hour.qlog.Push(e)
+        BotState.questEntry := ""
+        HookQuestDone(e.label, took)
         if (!accepted && BotState.questNextTry < Now() + 20)
             BotState.questNextTry := Now() + 20
     }
@@ -3361,9 +3534,12 @@ QuestAfterVisit(mode, accepted) {
             BotState.questStreak := 0
             BotState.questFails := 0
             LogMsg("[quest] accepted: " . QuestLabel())
-            HookQuest("Quest accepted", QuestLabel())
+            Tally("questsAcc")
+            QuestEntryOpen()
+            HookQuestAccepted()
         } else {
             LogMsg("[quest] answered Yes but no quest panel showed up - checking again soon")
+            ReportError("quest-nopanel", "No quest panel after Yes", "The Angler was answered Yes but no quest panel appeared.", 60)
             BotState.questNextTry := Now() + 45
         }
         return
@@ -3371,6 +3547,17 @@ QuestAfterVisit(mode, accepted) {
     if (mode == "accept") {
         if (st == "active" || st == "done")
             return                                       ; a quest was open after all: normal tracking takes over
+        if cooldown {
+            ; The Angler has no task yet: the 15 min cooldown counts from the last ACCEPT.
+            ; Ask again when it ends (never more than 15 min from now, never sooner than 60 s).
+            nxt := (BotState.questAcceptedAt > 0) ? BotState.questAcceptedAt + 905 : Now() + 300
+            nxt := Min(Now() + 905, Max(Now() + 60, nxt))
+            BotState.questNextTry := nxt
+            BotState.questStreak := 0
+            BotState.questFails := 0
+            LogMsg("[quest] the Angler has no task yet (15 min cooldown) - asking again in " . Ceil((nxt - Now()) / 60) . " min")
+            return
+        }
         BotState.questStreak += 1
         delay := Min(300, 60 * BotState.questStreak)
         BotState.questNextTry := Now() + delay
@@ -3378,11 +3565,169 @@ QuestAfterVisit(mode, accepted) {
     }
 }
 
-HookQuest(title, desc) {
+; One entry per quest, for the hourly report: {label, status, t}. status = ongoing / done / failed.
+QuestEntryOpen() {
+    e := BotState.questEntry
+    if (IsObject(e) && e.status == "ongoing")
+        return e
+    e := {label: QuestLabel(), status: "ongoing", t: Now()}
+    BotState.questEntry := e
+    Hour.qlog.Push(e)
+    return e
+}
+
+; Forget the open entry without counting it (a resumed quest that turned out to be over).
+QuestEntryDrop() {
+    e := BotState.questEntry
+    BotState.questEntry := ""
+    if !IsObject(e)
+        return
+    i := Hour.qlog.Length
+    while (i >= 1) {
+        if (Hour.qlog[i] == e) {
+            Hour.qlog.RemoveAt(i)
+            break
+        }
+        i--
+    }
+}
+
+; ---- the quest survives a stop / restart of the macro (saved in BloxFishing.ini, [quest]) ----
+QuestSave(force := false) {
+    if !QuestOn()
+        return
+    st := BotState.questState
+    if (st == "unknown")
+        return
+    sig := st . "|" . BotState.questType . "|" . BotState.questRarity . "|" . BotState.questTimed . "|" . BotState.questProg
+        . "|" . Round(BotState.questNextTry) . "|" . Round(BotState.questAcceptedAt)
+    if (!force && sig == BotState.questSig)
+        return
+    BotState.questSig := sig
+    try {
+        age := (BotState.questAcceptedAt > 0) ? Round(Max(0, Now() - BotState.questAcceptedAt)) : -1
+        left := Round(Max(0, BotState.questNextTry - Now()))
+        e := BotState.questEntry
+        IniWrite(st, INI_FILE, "quest", "state")
+        IniWrite(BotState.questType, INI_FILE, "quest", "type")
+        IniWrite(BotState.questRarity, INI_FILE, "quest", "rarity")
+        IniWrite(BotState.questTimed ? "1" : "0", INI_FILE, "quest", "timed")
+        IniWrite(BotState.questProg, INI_FILE, "quest", "prog")
+        IniWrite(StrReplace(BotState.questObjective, "`n", " "), INI_FILE, "quest", "objective")
+        IniWrite(IsObject(e) ? e.label : "", INI_FILE, "quest", "label")
+        IniWrite((age >= 0) ? DateAdd(A_Now, -age, "Seconds") : "", INI_FILE, "quest", "accepted")
+        IniWrite(DateAdd(A_Now, left, "Seconds"), INI_FILE, "quest", "next")
+    }
+}
+
+; At start-up: take the quest (and the 15 min cooldown) of the last session back.
+QuestResume() {
+    BotState.questResumed := false
+    if !QuestOn()
+        return
+    try {
+        nxt := IniRead(INI_FILE, "quest", "next", "")
+        if (nxt != "") {
+            left := DateDiff(nxt, A_Now, "Seconds")
+            if (left > 0 && left <= 3600)
+                BotState.questNextTry := Now() + left
+        }
+        acc := IniRead(INI_FILE, "quest", "accepted", "")
+        age := -1
+        if (acc != "")
+            age := DateDiff(A_Now, acc, "Seconds")
+        if (age >= 0 && age <= 43200)
+            BotState.questAcceptedAt := Now() - age
+        st := IniRead(INI_FILE, "quest", "state", "none")
+        if ((st != "active" && st != "done") || age < 0 || age > 43200)
+            return
+        BotState.questType := IniRead(INI_FILE, "quest", "type", "")
+        BotState.questRarity := IniRead(INI_FILE, "quest", "rarity", "")
+        BotState.questTimed := (IniRead(INI_FILE, "quest", "timed", "0") == "1")
+        BotState.questProg := IniRead(INI_FILE, "quest", "prog", "")
+        BotState.questObjective := IniRead(INI_FILE, "quest", "objective", "")
+        BotState.questState := st
+        BotState.questResumed := true
+        BotState.questRead := 0.0                        ; check the panel at the first tick
+        e := QuestEntryOpen()
+        lbl := IniRead(INI_FILE, "quest", "label", "")
+        if (lbl != "")
+            e.label := lbl
+        e.t := Now() - age
+        LogMsg("[quest] resuming the quest from the last session: " . QuestLabel()
+            . (BotState.questProg != "" ? "  (" . BotState.questProg . ")" : "") . "  - accepted " . Round(age / 60, 1) . " min ago")
+    }
+}
+
+; The quest is over: record it, count it, and post the webhook.
+QuestEnded(kind, why := "") {
+    e := QuestEntryOpen()
+    e.label := (QuestLabel() != "unknown quest") ? QuestLabel() : e.label
+    e.status := kind
+    took := Now() - e.t
+    inList := false
+    for x in Hour.qlog {
+        if (x == e) {
+            inList := true
+            break
+        }
+    }
+    if !inList
+        Hour.qlog.Push(e)
+    BotState.questEntry := ""
+    if (kind == "done") {
+        Tally("quests")
+        HookQuestDone(e.label, took)
+    } else {
+        Tally("questsFail")
+        LogMsg("[quest] FAILED: " . e.label . " - " . why)
+        shot := ErrorShot("quest-failed", 10)
+        if (shot != "")
+            LogMsg("[error] game screenshot saved: " . shot)
+        HookQuestFail(e.label, why, took, shot)
+    }
+}
+
+QuestFields() {
+    return [["Quests this session", BotStats.questsAcc . " accepted  |  " . BotStats.quests . " done  |  "
+        . BotStats.questsFail . " failed"]]
+}
+
+; Quest accepted: what the quest is.
+HookQuestAccepted() {
     if !(HookReady() && Cfg.hkQuest)
         return
-    f := [["Quests done this session", BotStats.quests]]
-    HookPost(EmbedJson(title, desc, 0xFBBF24, f), , , "quest")
+    obj := Trim(RegExReplace(BotState.questObjective, "\s+", " "))
+    f := [["Quest", QuestLabel()]]
+    if (obj != "")
+        f.Push(["Panel text", obj, false])
+    f.Push(["Type", BotState.questTimed ? "Timed" : "Normal"])
+    f.Push(["Next quest", "in about 15 min"])
+    for x in QuestFields()
+        f.Push(x)
+    HookPost(EmbedJson("Quest accepted", QuestLabel(), 0xFBBF24, f), , , "quest accepted")
+}
+
+HookQuestDone(label, took) {
+    if !(HookReady() && Cfg.hkQuestDone)
+        return
+    f := [["Quest", label], ["Time taken", FmtDur(took)]]
+    for x in QuestFields()
+        f.Push(x)
+    HookPost(EmbedJson("Quest finished", "The quest was completed.", 0x34D399, f), , , "quest done")
+}
+
+HookQuestFail(label, why, took := 0, shot := "") {
+    if !(HookReady() && Cfg.hkQuestFail)
+        return
+    useShot := (shot != "" && FileExist(shot))
+    f := [["Quest", label]]
+    if (took > 0)
+        f.Push(["Open for", FmtDur(took)])
+    for x in QuestFields()
+        f.Push(x)
+    HookPost(EmbedJson("Quest failed", why, 0xF87171, f, useShot ? "error.png" : ""), useShot ? shot : ""
+        , , "quest failed", "error.png")
 }
 
 NeedsBait() {
@@ -3530,6 +3875,7 @@ RunBot() {
     BotState.buyFailures := 0
     BotState.npcHits := 0
     BotState.stopReason := ""
+    BotState.stopShot := ""
     BotState.levelStart := -1
     BotState.levelLast := -1
     BotState.levelRead := Now()
@@ -3546,6 +3892,12 @@ RunBot() {
     BotState.questStreak := 0
     BotState.questHandFails := 0
     BotState.questSkillUses := 0
+    BotState.questProg := ""
+    BotState.questResumed := false
+    BotState.questSig := ""
+    BotState.questEntry := ""
+    BotState.questObjective := ""
+    QuestResume()
     MeterReset()
 
     LogMsg("[start] npc=" . Cfg.npc . " bait=" . CurBait().name . " buyBait=" . (Cfg.buyBait ? "on" : "OFF") . " baitNow=" . Cfg.baitNow
@@ -3563,6 +3915,9 @@ RunBot() {
         startOk := EnterFishingStance()
     if !startOk {
         BotState.stopReason := "start-up failed (NPC anchor / Shift Lock) - see the log"
+        BotState.stopShot := ErrorShot("startup")
+        if (BotState.stopShot != "")
+            LogMsg("[error] game screenshot saved: " . BotState.stopShot)
         FinishRun()
         return
     }
@@ -3574,7 +3929,8 @@ RunBot() {
             Cycle()
         } catch as err {
             Mouse.Hold(false)
-            LogMsg("[warn] cycle error: " . err.Message . " - recovering")
+            LogMsg("[warn] cycle error: " . err.Message . " (line " . err.Line . ") - recovering")
+            ReportError("cycle", "Cycle error", err.Message . "  (line " . err.Line . ")", 60)
             Wait(Timing.errorRecovery)
         }
     }
@@ -3597,6 +3953,8 @@ ResetStats() {
     BotStats.levels := 0
     BotStats.chests := 0
     BotStats.quests := 0
+    BotStats.questsAcc := 0
+    BotStats.questsFail := 0
     BotStats.lastUp := 0.0
     BotStats.started := Now()
     Hist.Length := 0
@@ -3615,6 +3973,7 @@ FinishRun() {
         . " | sales " . BotStats.sales . " | " . Round(BotStats.catches / mins, 1) . " fish/min")
     BotStats.lastUp := Now() - BotStats.started
     SetStatus("Idle")
+    QuestSave(true)
     HookStopMsg()
 }
 
@@ -3684,6 +4043,8 @@ SETTINGS_SPEC := [
   , ["webhook", "hkCatchShot", "0", "b"]
   , ["webhook", "hkChest", "1", "b"]
   , ["webhook", "hkQuest", "1", "b"]
+  , ["webhook", "hkQuestDone", "1", "b"]
+  , ["webhook", "hkQuestFail", "1", "b"]
 ]
 
 ; [game] rdp=auto|on|off in BloxFishing.ini (auto = Windows reports a remote session).
@@ -4201,16 +4562,18 @@ HookStopMsg() {
         , ["Bait bought", Fmt(BotStats.baitBought) . "  ($" . Fmt(BotStats.spent) . ")"]
         , ["Net profit", (net < 0 ? "-$" : "$") . Fmt(Abs(net))]
         , ["Casts / escapes", BotStats.casts . " / " . BotStats.escapes]
-        , ["Levels", LevelText()]]
-    card := ReportCard("stop")
-    useCard := (card != "")
+        , ["Levels", LevelText()]
+        , ["Quests", BotStats.questsAcc . " accepted  |  " . BotStats.quests . " done  |  " . BotStats.questsFail . " failed"]]
+    ; The hourly report (image card) is NOT sent here: it only goes out on schedule, to the hourly URL.
     if (reason != "") {
+        shot := BotState.stopShot
+        useShot := (shot != "" && FileExist(shot))
+        f.Push(["Last log lines", LogTail(8), false])
         mention := (Cfg.hkMention != "") ? "<@" . Cfg.hkMention . ">" : ""
-        HookPost(EmbedJson("Macro stopped - needs attention", reason, 0xF87171, useCard ? "" : f
-            , useCard ? "report.png" : ""), useCard ? card : "", mention, "stop message", "report.png")
+        HookPost(EmbedJson("Macro stopped - needs attention", reason, 0xF87171, f, useShot ? "error.png" : "")
+            , useShot ? shot : "", mention, "stop message", "error.png")
     } else {
-        HookPost(EmbedJson("Macro stopped", "Stopped manually. Session summary:", 0xFBBF24, useCard ? "" : f
-            , useCard ? "report.png" : ""), useCard ? card : "", , "stop message", "report.png")
+        HookPost(EmbedJson("Macro stopped", "Stopped manually. Session summary:", 0xFBBF24, f), , , "stop message")
     }
 }
 
@@ -4306,6 +4669,23 @@ HourlyTick() {
         BotState.reportDue := true
 }
 
+; "done: catch a rare fish (12m 03s)" lines for the report, newest last.
+QuestListText(maxN := 5) {
+    out := ""
+    n := Hour.qlog.Length
+    from := Max(1, n - maxN + 1)
+    i := from
+    while (i <= n) {
+        e := Hour.qlog[i]
+        mark := (e.status == "done") ? "[done]" : (e.status == "failed") ? "[failed]" : "[ongoing]"
+        out .= (out != "" ? "`n" : "") . mark . " " . e.label
+        i++
+    }
+    if (from > 1)
+        out := "(+" . (from - 1) . " earlier)`n" . out
+    return out
+}
+
 SendHourly(*) {
     SyncSettings(false)
     if !HookUrlOk() {
@@ -4319,13 +4699,16 @@ SendHourly(*) {
         , ["Bait bought", Fmt(h.baitBought) . "  ($" . Fmt(h.spent) . " spent)"]
         , ["Fish caught", Fmt(h.catches)]
         , ["Chests", h.chests]
-        , ["Quests done", h.quests]
+        , ["Quests", h.questsAcc . " accepted  |  " . h.quests . " done  |  " . h.questsFail . " failed"]
         , ["Net profit", (net < 0 ? "-$" : "$") . Fmt(Abs(net))]
         , ["Casts / escapes", h.casts . " / " . h.escapes]
         , ["Levels gained", "+" . h.levels . "   (" . LevelText() . " this session)"]
         , ["Fish per hour", Round(h.catches * 60 / mins, 1)]
         , ["Session total", "$" . Fmt(BotStats.income) . " earned  |  " . Fmt(BotStats.catches)
             . " fish  |  " . FmtDur(Now() - BotStats.started) . " running", false]]
+    ql := QuestListText(5)
+    if (ql != "")
+        f.Push(["Quests this hour", ql, false])
     cmp := CompareLine()
     if (cmp != "")
         f.Push(["Vs previous hour (per hour)", cmp, false])
@@ -4642,6 +5025,34 @@ CardPanel(c, x, y, w, h, title, rows) {
     }
 }
 
+; Full-width panel: quests of this report window (counts + the last few quests).
+CardQuests(c, x, y, w, h) {
+    Gp.RoundRect(c, x, y, w, h, 14, 0xFF1E1E22)
+    Gp.Text(c, "QUESTS", x, y + 8, w, 28, 15, 0xFFEDEDED, true, 1, 1)
+    cells := [["ACCEPTED", Hour.questsAcc, 0xFFFBBF24], ["DONE", Hour.quests, 0xFF4ADE80], ["FAILED", Hour.questsFail, 0xFFF87171]]
+    for i, cell in cells {
+        cx := x + 18 + (i - 1) * 110
+        Gp.Text(c, cell[1], cx, y + 44, 104, 18, 11, 0xFF9A9AA4, false, 0, 1)
+        Gp.Text(c, cell[2], cx, y + 62, 104, 40, 26, cell[3], true, 0, 1)
+    }
+    n := Hour.qlog.Length
+    if (n = 0) {
+        Gp.Text(c, "No quest this window", x + 360, y + 60, w - 380, 24, 12, 0xFF9A9AA4, false, 0, 1)
+        return
+    }
+    i := Max(1, n - 2)
+    ry := y + 44
+    while (i <= n) {
+        e := Hour.qlog[i]
+        col := (e.status == "done") ? 0xFF4ADE80 : (e.status == "failed") ? 0xFFF87171 : 0xFFFBBF24
+        tag := (e.status == "done") ? "DONE" : (e.status == "failed") ? "FAILED" : "ONGOING"
+        Gp.Text(c, tag, x + 360, ry, 80, 22, 11, col, true, 0, 1)
+        Gp.Text(c, e.label, x + 445, ry, w - 465, 22, 12, 0xFFEDEDED, false, 0, 1)
+        ry += 25
+        i++
+    }
+}
+
 ; Full-width panel: per-hour rates of fish / money / levels against the previous hour.
 ; prev = 0 when there is no previous hour yet.
 CardCompare(c, x, y, w, h, title, cur, prev) {
@@ -4703,7 +5114,7 @@ ReportCardDraw(kind) {
     white := 0xFFEDEDED
     blue := 0xFF60A5FA
 
-    c := Gp.Canvas(1000, 700, 0xFF121214)
+    c := Gp.Canvas(1000, 830, 0xFF121214)
     CardChart(c, 24, 24, 632, 276, "MONEY EARNED", money, up, green, t0, true, "$" . Fmt(BotStats.income))
     CardChart(c, 24, 312, 632, 224, "LEVELS GAINED", lvls, up, amber, t0, false, LvlGain(BotStats.levels))
 
@@ -4752,6 +5163,7 @@ ReportCardDraw(kind) {
     if !PrevHour.valid
         cmpTitle := "HOURLY RATES  -  comparison starts with the next report"
     CardCompare(c, 24, 552, 952, 124, cmpTitle, cur, prv)
+    CardQuests(c, 24, 692, 952, 124)
 
     path := TMP_DIR . "\card_" . FormatTime(, "yyyyMMdd_HHmmss") . ".png"
     return Gp.Save(c, path) ? path : ""
@@ -5316,13 +5728,18 @@ BuildGui(startPage := "dash") {
     Ui.questStatus := Lbl(g, "quest", 214, 262, 590, "Macro not running.", th.txt, 10, 600)
     Section(g, "quest", 214, 306, "QUESTS THE MACRO HANDLES")
     Lbl(g, "quest", 214, 332, 590, "1. Catch a Common / Uncommon / Rare / Epic / Legendary / Mythical fish`n"
-        . "2. Catch 3 fish within 2:05 (sales and bait trips wait while it runs)`n"
-        . "3. 3 perfect casts + 3 perfect reactions (turn Perfect cast on)`n"
+        . "2. Catch 3 fish within 2:05 (fast bite forced on, sales and bait trips wait)`n"
+        . "3. 3 perfect casts + 3 perfect reactions (Perfect cast + fast bite are forced on by the macro)`n"
         . "4. Use a rod skill 3 times (uses the Rod skill key above)", th.muted, 9, 400, 84)
     Section(g, "quest", 214, 436, "FISHERMAN QUESTS")
     Lbl(g, "quest", 214, 462, 590, "The Fisherman has other quests, but the macro does not know their dialogue pages yet. "
         . "Send a screenshot of each Fisherman quest page and of the quest panel and they can be added. "
-        . "Until then, every quest text the macro cannot match is written to the log as [quest] ... so nothing is lost.", th.muted, 9, 400, 70)
+        . "Until then, every quest text the macro cannot match is written to the log as [quest] ... so nothing is lost.", th.muted, 9, 400, 56)
+    Section(g, "quest", 214, 528, "DISCORD (needs the Webhook page set up)")
+    AddToggle(g, "quest", "hkQuest", 214, 554, "Quest accepted", Cfg.hkQuest, 140)
+    AddToggle(g, "quest", "hkQuestDone", 400, 554, "Quest finished", Cfg.hkQuestDone, 140)
+    AddToggle(g, "quest", "hkQuestFail", 586, 554, "Quest failed", Cfg.hkQuestFail, 140)
+    Lbl(g, "quest", 214, 588, 590, "The hourly report also lists the quests of the hour (accepted / done / failed).", th.muted, 9)
 
     ; ---- SHOP AND BAIT -----------------------------------------------------
     PageHeader(g, "shop", "Shop and Bait", "Which NPC you AFK at, which bait to buy, and when to sell.")
@@ -5374,7 +5791,7 @@ BuildGui(startPage := "dash") {
     AddToggle(g, "hook", "hkSale", 214, 334, "Fish sold", Cfg.hkSale, 200)
     AddToggle(g, "hook", "hkShot", 500, 334, "Screenshots (sale, bait, report)", Cfg.hkShot, 230)
     AddToggle(g, "hook", "hkBait", 214, 368, "Bait purchased", Cfg.hkBait, 200)
-    AddToggle(g, "hook", "hkErr", 500, 368, "Errors and safety stops", Cfg.hkErr, 230)
+    AddToggle(g, "hook", "hkErr", 500, 368, "Errors + game screenshot", Cfg.hkErr, 230)
     AddToggle(g, "hook", "hkHourly", 214, 402, "Hourly report", Cfg.hkHourly, 120)
     Lbl(g, "hook", 400, 405, 50, "every", th.muted)
     AddEdit(g, "hook", "hkEveryMin", 440, 401, 56, Cfg.hkEveryMin, true)
@@ -5386,7 +5803,6 @@ BuildGui(startPage := "dash") {
     AddToggle(g, "hook", "hkCatch", 214, 502, "Fish caught + progress", Cfg.hkCatch, 200)
     AddToggle(g, "hook", "hkCatchShot", 500, 502, "Catch screenshot (slower)", Cfg.hkCatchShot, 230)
     AddToggle(g, "hook", "hkChest", 214, 536, "Chest collected", Cfg.hkChest, 200)
-    AddToggle(g, "hook", "hkQuest", 500, 536, "Quest accepted / done", Cfg.hkQuest, 230)
     Lbl(g, "hook", 214, 566, 400, "Hourly report webhook URL (optional - empty = same channel)", th.muted)
     AddEdit(g, "hook", "hkUrlHourly", 214, 588, 400, Cfg.hkUrlHourly, false, true)
     Ui.hookStatus := Lbl(g, "hook", 214, 616, 590, "", th.muted, 9)
